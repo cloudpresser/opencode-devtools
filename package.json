@@ -1,0 +1,14 @@
+{
+  "name": "opencode-devtools",
+  "version": "0.1.0",
+  "description": "OpenCode plugin providing dev server, testing, type checking, PR creation, and build status tools",
+  "main": "src/index.ts",
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.60",
+    "bun-pty": "^0.4.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
