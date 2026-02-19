@@ -128,10 +128,8 @@ const stripAnsi = (str: string): string =>
     "",
   );
 
-const ERROR_START =
-  /(?:Error|TypeError|SyntaxError|ReferenceError|RangeError|URIError|EvalError|AggregateError|error TS\d+|ENOENT|EACCES|ECONNREFUSED|Failed to compile|Build Error|Unhandled Runtime Error|Module not found)/;
-
-const STACK_LINE = /^\s+at\s|^Error:|^\s+\^/;
+const ERROR_FILTER =
+  /\b(error|Error|ERROR|FAIL|fail|Failed|failed|Warning|WARN|TypeError|SyntaxError|ReferenceError|RangeError|Invariant Violation|BUNDLE|Unable to resolve|Module not found|Failed to compile|Build Error)\b/;
 
 // ─── Plugin ─────────────────────────────────────────────────────────────────
 
@@ -147,9 +145,9 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
       "dev-server_start": tool({
         description:
           "Start a development server (Expo mobile or Next.js web). " +
-          "This tool cannot directly spawn long-running background processes. " +
-          "It returns the exact pty_spawn command you must call next to start the server. " +
-          "After calling pty_spawn, store the session ID and use it with server-logs and server-errors tools.",
+          "If a server of the same type is already running, returns its info instead of spawning a new one. " +
+          "Automatically finds an available port if the default is in use. " +
+          "Multiple agents share the same server instance.",
         args: {
           server: tool.schema.enum(["expo", "nextjs"]),
           port: tool.schema.optional(tool.schema.number()),
@@ -159,9 +157,10 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
             expo: {
               cwd: path.join(root, "apps", "mobile"),
               command: "yarn",
-              args: ["dev"],
+              args: ["dev", "--ios"],
               title: "Expo Dev Server",
               portFlag: "--port",
+              defaultPort: 8081,
             },
             nextjs: {
               cwd: path.join(root, "apps", "next"),
@@ -169,21 +168,79 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
               args: ["dev"],
               title: "Next.js Dev Server",
               portFlag: "-p",
+              defaultPort: 3000,
             },
           };
 
           const cfg = config[args.server];
 
-          // Kill existing session for this server type
+          // Check if a server of this type is already running in our session manager
           const existing = manager.findByTitle(cfg.title);
+          if (existing && existing.status === "running") {
+            const buf = manager.readBuffer(existing.id, { limit: 50 });
+            const lines = buf?.lines ?? [];
+            // Try to find the port from the output
+            const portMatch = lines
+              .join("\n")
+              .match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
+            const runningPort = portMatch ? portMatch[1] : "unknown";
+            return [
+              `Server already running (shared session).`,
+              `Type: ${cfg.title}`,
+              `Port: ${runningPort}`,
+              `Session: ${existing.id} (pid: ${existing.pid})`,
+              `Use server-logs and server-errors tools to monitor.`,
+            ].join("\n");
+          }
+
+          // Kill any dead session for this server type
           if (existing) {
             manager.kill(existing.id);
           }
 
-          const cmdArgs = [...cfg.args];
-          if (args.port) {
-            cmdArgs.push(cfg.portFlag, String(args.port));
+          // Find an available port
+          const findAvailablePort = async (
+            startPort: number,
+          ): Promise<number> => {
+            for (let p = startPort; p < startPort + 20; p++) {
+              try {
+                const result = await Bun.$`lsof -ti :${p} 2>/dev/null`
+                  .quiet()
+                  .text();
+                if (!result.trim()) return p; // Port is free
+              } catch {
+                return p; // lsof failed = port is free
+              }
+            }
+            return startPort; // Fallback
+          };
+
+          const requestedPort = args.port ?? cfg.defaultPort;
+          const port = await findAvailablePort(requestedPort);
+
+          // Kill any existing process on the target port
+          try {
+            const pids = (
+              await Bun.$`lsof -ti :${port} 2>/dev/null`.quiet().text()
+            ).trim();
+            if (pids) {
+              await Bun.$`kill -9 ${pids} 2>/dev/null || true`.quiet();
+              await new Promise((r) => setTimeout(r, 500));
+            }
+          } catch {
+            // Ignore
           }
+
+          // For Expo, also kill the app in the simulator
+          if (args.server === "expo") {
+            try {
+              await Bun.$`xcrun simctl terminate booted com.vectorvest.mobile 2>/dev/null || true`.quiet();
+            } catch {
+              // Ignore
+            }
+          }
+
+          const cmdArgs = [...cfg.args, cfg.portFlag, String(port)];
 
           const session = manager.spawn({
             command: cfg.command,
@@ -192,22 +249,89 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
             title: cfg.title,
           });
 
-          // Wait briefly for server to start producing output
-          await new Promise((r) => setTimeout(r, 2000));
+          // Wait for server to be fully ready (connected to client)
+          const readyPatterns = {
+            expo: [
+              /iOS Bundled \d+ms/, // Bundle sent to simulator
+              /LOG\s/, // App is running and logging
+            ],
+            nextjs: [
+              /Ready in/, // Next.js ready signal
+              /✓ Ready/, // Alternative ready signal
+            ],
+          };
 
-          const lines = session.buffer.slice(-10).map(stripAnsi).join("\n");
+          const errorPatterns = [
+            /error/i,
+            /BUNDLE ERROR/i,
+            /Failed to compile/i,
+            /Unable to resolve/i,
+            /Cannot find module/i,
+          ];
+
+          const patterns = readyPatterns[args.server];
+          const TIMEOUT_MS = 180_000; // 3 minutes for full bundle
+          const POLL_MS = 1_000;
+          const startTime = Date.now();
+          let ready = false;
+          let lastCheckedLine = 0;
+
+          while (Date.now() - startTime < TIMEOUT_MS) {
+            if (session.status !== "running") {
+              const tail = session.buffer.slice(-20).map(stripAnsi).join("\n");
+              return `Server exited unexpectedly (exit code: ${session.exitCode}).\n\n${tail}`;
+            }
+
+            // Check new lines since last poll
+            const currentLines = session.buffer.length;
+            if (currentLines > lastCheckedLine) {
+              const newLines = session.buffer
+                .slice(lastCheckedLine)
+                .map(stripAnsi);
+
+              for (const line of newLines) {
+                if (patterns.some((p) => p.test(line))) {
+                  ready = true;
+                  break;
+                }
+              }
+              lastCheckedLine = currentLines;
+            }
+
+            if (ready) break;
+            await new Promise((r) => setTimeout(r, POLL_MS));
+          }
+
+          // Grab the last meaningful lines (skip progress bars and QR code)
+          const recentLines = session.buffer
+            .slice(-15)
+            .map(stripAnsi)
+            .filter((l) => !l.match(/^[▄▀█▓░ ]{5,}$/) && l.trim().length > 0)
+            .slice(-5)
+            .join("\n");
+
+          if (!ready) {
+            return [
+              `Server started but readiness not confirmed within ${TIMEOUT_MS / 1000}s.`,
+              `Type: ${cfg.title}`,
+              `Port: ${port}`,
+              `Session: ${session.id} (pid: ${session.pid})`,
+              "",
+              "Recent output:",
+              recentLines || "(no output)",
+              "",
+              "Use server-logs and server-errors tools to investigate.",
+            ].join("\n");
+          }
 
           return [
-            `Server started: ${cfg.title}`,
-            `Session ID: ${session.id}`,
-            `PID: ${session.pid}`,
-            `Status: ${session.status}`,
-            `Working directory: ${cfg.cwd}`,
+            `Server ready: ${cfg.title}`,
+            `Port: ${port}`,
+            `Session: ${session.id} (pid: ${session.pid})`,
             "",
-            "Recent output:",
-            lines || "(no output yet - server may still be starting)",
+            recentLines,
             "",
-            "Use server-logs and server-errors tools with this session to monitor.",
+            "Use server-logs and server-errors tools to monitor.",
           ].join("\n");
         },
       }),
@@ -219,13 +343,15 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
         description:
           "Get logs from a running Expo or Next.js dev server. " +
           "The dev server must have been started with the dev-server tool. " +
-          "Supports regex filtering, pagination (offset + lineCount), and verbose mode.",
+          "Supports regex filtering, pagination (offset + lineCount), and verbose mode. " +
+          "Use errorsOnly to filter to error/warning lines.",
         args: {
           server: tool.schema.enum(["expo", "next"]),
           pattern: tool.schema.optional(tool.schema.string()),
           offset: tool.schema.optional(tool.schema.number()),
           lineCount: tool.schema.optional(tool.schema.number()),
           verbose: tool.schema.optional(tool.schema.boolean()),
+          errorsOnly: tool.schema.optional(tool.schema.boolean()),
         },
         async execute(args) {
           const titleMap = {
@@ -237,27 +363,38 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
             return `No running ${args.server} dev server found. Start one with dev-server_start first.`;
           }
 
+          // If errorsOnly, use ERROR_FILTER as the pattern (overrides user pattern)
+          const filterPattern = args.errorsOnly
+            ? ERROR_FILTER.source
+            : args.pattern;
+
           const limit = args.lineCount ?? 100;
           const offset = args.offset ?? 0;
           const result = manager.readBuffer(session.id, {
             offset,
             limit,
-            pattern: args.pattern,
+            pattern: filterPattern,
           });
 
           if (!result) return "Session not found.";
 
           let lines = result.lines;
           if (!args.verbose) {
-            lines = lines.map(stripAnsi).filter((l) => l.trim().length > 0);
+            lines = lines
+              .map(stripAnsi)
+              .filter((l: string) => l.trim().length > 0);
+          }
+
+          if (args.errorsOnly && lines.length === 0) {
+            return `No errors found in ${args.server} server output.`;
           }
 
           const header = [
-            `=== ${titleMap[args.server]} Logs ===`,
+            `=== ${titleMap[args.server]} Logs${args.errorsOnly ? " (errors only)" : ""} ===`,
             `Session: ${session.id} | Status: ${session.status}`,
             `Lines: ${offset + 1}-${offset + lines.length} of ${result.totalLines}`,
-            args.pattern
-              ? `Filter: /${args.pattern}/ (${result.matchedLines} matches)`
+            filterPattern
+              ? `Filter: /${filterPattern}/ (${result.matchedLines} matches)`
               : "",
             "---",
           ]
@@ -265,7 +402,10 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
             .join("\n");
 
           const numbered = lines
-            .map((l, i) => `${String(offset + i + 1).padStart(5)} | ${l}`)
+            .map(
+              (l: string, i: number) =>
+                `${String(offset + i + 1).padStart(5)} | ${l}`,
+            )
             .join("\n");
 
           const remaining = result.matchedLines - offset - lines.length;
@@ -279,183 +419,247 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
       }),
 
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // SERVER ERRORS
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      "server-errors": tool({
-        description:
-          "Get errors with stack traces from a running Expo or Next.js dev server. " +
-          "The dev server must have been started with the dev-server tool. " +
-          "Supports four modes: all (every error), list (short summary), " +
-          "regex (filter by pattern), or index (single error by index).",
-        args: {
-          server: tool.schema.enum(["expo", "next"]),
-          mode: tool.schema.enum(["all", "list", "regex", "index"]),
-          pattern: tool.schema.optional(tool.schema.string()),
-          index: tool.schema.optional(tool.schema.number()),
-        },
-        async execute(args) {
-          const titleMap = {
-            expo: "Expo Dev Server",
-            next: "Next.js Dev Server",
-          };
-          const session = manager.findByTitle(titleMap[args.server]);
-          if (!session) {
-            return `No running ${args.server} dev server found. Start one with dev-server_start first.`;
-          }
-
-          const rawLines = session.buffer.map(stripAnsi);
-
-          // Parse error blocks
-          const errors: { header: string; lines: string[] }[] = [];
-          let current: { header: string; lines: string[] } | null = null;
-
-          for (const line of rawLines) {
-            if (ERROR_START.test(line)) {
-              if (current) errors.push(current);
-              current = { header: line.trim(), lines: [line] };
-            } else if (
-              current &&
-              (STACK_LINE.test(line) || line.startsWith(" "))
-            ) {
-              current.lines.push(line);
-            } else if (current) {
-              // Check if it's a continuation (indented or empty)
-              if (line.trim() === "") {
-                current.lines.push(line);
-              } else {
-                errors.push(current);
-                current = null;
-              }
-            }
-          }
-          if (current) errors.push(current);
-
-          if (errors.length === 0) {
-            return `No errors found in ${args.server} server output.`;
-          }
-
-          switch (args.mode) {
-            case "all":
-              return [
-                `Found ${errors.length} error(s) in ${args.server} server:`,
-                "",
-                ...errors.flatMap((e, i) => [
-                  `━━━ Error ${i + 1} ━━━`,
-                  ...e.lines,
-                  "",
-                ]),
-              ].join("\n");
-
-            case "list":
-              return [
-                `Found ${errors.length} error(s):`,
-                ...errors.map(
-                  (e, i) =>
-                    `  [${i}] ${e.header.slice(0, 120)}${e.header.length > 120 ? "..." : ""}`,
-                ),
-              ].join("\n");
-
-            case "regex": {
-              if (!args.pattern) return "Pattern is required for regex mode.";
-              try {
-                const regex = new RegExp(args.pattern, "i");
-                const matched = errors.filter(
-                  (e) =>
-                    regex.test(e.header) || e.lines.some((l) => regex.test(l)),
-                );
-                if (matched.length === 0)
-                  return `No errors matching /${args.pattern}/`;
-                return [
-                  `${matched.length} error(s) matching /${args.pattern}/:`,
-                  "",
-                  ...matched.flatMap((e, i) => [
-                    `━━━ Error ${i + 1} ━━━`,
-                    ...e.lines,
-                    "",
-                  ]),
-                ].join("\n");
-              } catch {
-                return `Invalid regex: ${args.pattern}`;
-              }
-            }
-
-            case "index": {
-              const idx = args.index ?? 0;
-              if (idx < 0 || idx >= errors.length) {
-                return `Index ${idx} out of range. ${errors.length} errors available (0-${errors.length - 1}).`;
-              }
-              return [`Error ${idx}:`, ...errors[idx].lines].join("\n");
-            }
-          }
-        },
-      }),
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       // CHECK TYPES
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       "check-types": tool({
         description:
           "Run TypeScript type checking on the monorepo. " +
-          "Returns errors found or confirms no errors.",
+          "Returns errors found or confirms no errors. " +
+          "Use branchOnly for faster incremental checks (only packages changed on current branch).",
         args: {
           compact: tool.schema.optional(tool.schema.boolean()),
+          branchOnly: tool.schema.optional(tool.schema.boolean()),
         },
         async execute(args) {
           const compact = args.compact !== false; // default true
+          const mode = args.branchOnly ? "branch" : "full";
           try {
-            const result = await $`cd ${root} && yarn check-types 2>&1`
+            const envWithBin = {
+              ...process.env,
+              PATH: `${root}/node_modules/.bin:${process.env.PATH}`,
+            };
+            const result = args.branchOnly
+              ? await $`cd ${root} && bash check-branch-types.sh 2>&1`
+                  .env(envWithBin)
+                  .nothrow()
+                  .quiet()
+              : await $`cd ${root} && yarn check-types 2>&1`.nothrow().quiet();
+            const output = stripAnsi(result.stdout.toString());
+
+            if (result.exitCode === 0) {
+              // Extract package count from lerna output if available
+              const pkgMatch = output.match(
+                /(\d+) packages? ran check-types successfully/,
+              );
+              const count = pkgMatch ? ` (${pkgMatch[1]} packages)` : "";
+              return `Type check passed${count}. No errors found. [${mode}]`;
+            }
+
+            // Type errors — parse and format
+            const lines = output.split("\n");
+
+            if (compact) {
+              // Group errors by file for compact output
+              const errors: string[] = [];
+              const seen = new Set<string>();
+
+              for (const line of lines) {
+                // Match TypeScript errors: path(line,col): error TS...
+                // or tsup/tsc format: path:line:col - error TS...
+                const tsMatch = line.match(
+                  /([^(\s]+)\((\d+),(\d+)\):\s*error\s+(TS\d+):\s*(.+)/,
+                );
+                const tscMatch = line.match(
+                  /([^:\s]+):(\d+):(\d+)\s*-\s*error\s+(TS\d+):\s*(.+)/,
+                );
+                const m = tsMatch || tscMatch;
+                if (m) {
+                  const key = `${m[1]}:${m[2]} ${m[4]}`;
+                  if (!seen.has(key)) {
+                    seen.add(key);
+                    errors.push(`${m[1]}:${m[2]}:${m[3]} ${m[4]}: ${m[5]}`);
+                  }
+                }
+              }
+
+              if (errors.length > 0) {
+                return [
+                  `Type check FAILED: ${errors.length} error${errors.length > 1 ? "s" : ""} [${mode}]`,
+                  "",
+                  ...errors.slice(0, 100),
+                ].join("\n");
+              }
+            }
+
+            // Non-compact or no TS errors matched — return filtered output
+            const meaningful = lines.filter(
+              (l: string) =>
+                l.includes("error TS") ||
+                l.includes("Error:") ||
+                l.includes("FAIL") ||
+                l.startsWith("error") ||
+                l.trim() === "",
+            );
+
+            return [
+              `Type check FAILED (exit code: ${result.exitCode}) [${mode}]`,
+              "",
+              ...(meaningful.length > 5
+                ? meaningful.slice(0, 200)
+                : lines.slice(-100)),
+            ].join("\n");
+          } catch (e: any) {
+            return `Type check execution error: ${e.message}`;
+          }
+        },
+      }),
+
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // LINT
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      lint: tool({
+        description:
+          "Run ESLint on the project. By default lints only files changed since last commit. " +
+          "Returns errors found or confirms no errors.",
+        args: {
+          all: tool.schema.optional(tool.schema.boolean()),
+          staged: tool.schema.optional(tool.schema.boolean()),
+          fix: tool.schema.optional(tool.schema.boolean()),
+        },
+        async execute(args) {
+          const lintArgs = ["lint"];
+          if (args.all) lintArgs.push("--all");
+          if (args.staged) lintArgs.push("--staged");
+          if (args.fix) lintArgs.push("--fix");
+
+          try {
+            const result = await $`cd ${root} && yarn ${lintArgs} 2>&1`
               .nothrow()
               .quiet();
-            const output = result.stdout.toString();
+            const output = stripAnsi(result.stdout.toString());
             const exitCode = result.exitCode;
 
-            if (
-              exitCode === 0 ||
-              output.includes("Done") ||
-              output.includes("Successfully ran")
-            ) {
-              return "Type check passed. No errors found.";
+            if (exitCode === 0) {
+              if (output.includes("No TypeScript/JavaScript files to lint")) {
+                return "Lint passed. No files to lint.";
+              }
+              return "Lint passed. No errors found.";
             }
 
-            if (!compact) {
-              return output.slice(0, 10_000);
-            }
+            // Parse ESLint output for compact summary
+            const lines = output.split("\n");
+            const problemMatch = output.match(
+              /(\d+) problems? \((\d+) errors?, (\d+) warnings?\)/,
+            );
 
-            // Compact: group errors by file
-            const errorRegex =
-              /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.+)$/gm;
-            const byFile = new Map<string, string[]>();
-            let match;
-            let count = 0;
-
-            while ((match = errorRegex.exec(output)) !== null) {
-              const [, file, row, col, code, msg] = match;
-              const key = file.trim();
-              if (!byFile.has(key)) byFile.set(key, []);
-              byFile.get(key)!.push(`  L${row}:${col} ${code}: ${msg}`);
-              count++;
-            }
-
-            if (count === 0) {
-              // Couldn't parse, return raw
-              return output.slice(0, 10_000);
-            }
-
-            const lines: string[] = [
-              `Found ${count} type error(s) in ${byFile.size} file(s):`,
-              "",
-            ];
-            for (const [file, errs] of byFile) {
-              lines.push(
-                `${file} (${errs.length} error${errs.length > 1 ? "s" : ""}):`,
+            if (problemMatch) {
+              // Filter to only file paths + error lines + summary
+              const meaningful = lines.filter(
+                (l: string) =>
+                  l.startsWith("/") ||
+                  l.match(/^\s+\d+:\d+/) ||
+                  l.match(/^\u2716/) ||
+                  l.trim() === "",
               );
-              lines.push(...errs);
-              lines.push("");
+              return [
+                `Lint FAILED: ${problemMatch[1]} problems (${problemMatch[2]} errors, ${problemMatch[3]} warnings)`,
+                "",
+                ...meaningful.slice(0, 200),
+              ].join("\n");
             }
 
-            return lines.join("\n");
+            // Fallback: return raw output (trimmed)
+            return output.slice(0, 10_000);
           } catch (e: any) {
-            return `Type check failed: ${e.message}`;
+            return `Lint execution error: ${e.message}`;
+          }
+        },
+      }),
+
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // GENERATE
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      generate: tool({
+        description:
+          "Run the Tensor code generator (yarn generate --non-interactive). " +
+          "MUST be used before creating any new features, views, models, viewmodels, " +
+          "queries, mutations, or network packages. " +
+          "Available templates: feature, simple-feature, view, view-model, model, " +
+          "query, mutation, network, context, adr, feature-story, view-story, " +
+          "query-story, mutation-story.",
+        args: {
+          template: tool.schema.string(),
+          name: tool.schema.string(),
+          parent: tool.schema.optional(tool.schema.string()),
+          isStreaming: tool.schema.optional(tool.schema.boolean()),
+        },
+        async execute(args) {
+          const cmdArgs = [
+            "generate",
+            "--non-interactive",
+            "--template",
+            args.template,
+            "--name",
+            args.name,
+          ];
+          if (args.parent) cmdArgs.push("--parent", args.parent);
+          if (args.isStreaming !== undefined)
+            cmdArgs.push("--isStreaming", String(args.isStreaming));
+
+          try {
+            const result = await $`cd ${root} && yarn ${cmdArgs} 2>&1`
+              .nothrow()
+              .quiet();
+            const output = stripAnsi(result.stdout.toString());
+            const exitCode = result.exitCode;
+
+            if (exitCode === 0) {
+              // Extract meaningful output: generated file paths, skip yarn/lerna noise
+              const lines = output.split("\n");
+              const generated = lines.filter(
+                (l: string) =>
+                  l.includes("Generated") ||
+                  l.includes("created") ||
+                  l.includes("Created") ||
+                  l.includes("packages/") ||
+                  l.includes("apps/") ||
+                  l.includes("Successfully"),
+              );
+
+              if (generated.length > 0) {
+                return [
+                  `Generator completed: ${args.template} "${args.name}"`,
+                  "",
+                  ...generated,
+                ].join("\n");
+              }
+
+              // Fallback: return last meaningful lines
+              const meaningful = lines
+                .filter(
+                  (l: string) =>
+                    l.trim().length > 0 &&
+                    !l.includes("yarn ") &&
+                    !l.includes("$ tensor") &&
+                    !l.includes("Done in"),
+                )
+                .slice(-20);
+
+              return [
+                `Generator completed: ${args.template} "${args.name}"`,
+                "",
+                ...meaningful,
+              ].join("\n");
+            }
+
+            // Failure — return full output
+            return [
+              `Generator FAILED (exit code: ${exitCode}): ${args.template} "${args.name}"`,
+              "",
+              output.slice(0, 5_000),
+            ].join("\n");
+          } catch (e: any) {
+            return `Generator execution error: ${e.message}`;
           }
         },
       }),
@@ -465,8 +669,9 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       "create-pr": tool({
         description:
-          "Create a pull request using @cloudpresser/create-pr CLI. " +
-          "Uses AI to generate a PR title and description from the diff.",
+          "Create a pull request using @cloudpresser/create-pr CLI tool. " +
+          "Auto-detects org/project/repo from git remote and .cloudpresser config. " +
+          "Handles interactive prompts automatically.",
         args: {
           title: tool.schema.optional(tool.schema.string()),
           body: tool.schema.optional(tool.schema.string()),
@@ -475,91 +680,93 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
           baseBranch: tool.schema.optional(tool.schema.string()),
         },
         async execute(args) {
-          const cmdArgs: string[] = [];
-
-          // Let the CLI read org/project/repo from .cloudpresser files.
-          // Only pass args that the user explicitly provided.
+          const cmdArgs = ["@cloudpresser/create-pr"];
           if (args.title) cmdArgs.push("--title", args.title);
           if (args.body) cmdArgs.push("--description", args.body);
           if (args.draft) cmdArgs.push("--draft");
           const target = args.targetBranch || args.baseBranch;
           if (target) cmdArgs.push("--targetBranch", target);
 
-          // Use PTY to handle interactive prompts automatically
-          try {
-            const output = await new Promise<string>((resolve, reject) => {
-              const timeout = setTimeout(() => {
-                try {
-                  term.kill();
-                } catch {}
-                reject(new Error("timeout"));
-              }, 120_000);
-
-              let buffer = "";
-              const term = new Terminal(
-                "bunx",
-                ["@cloudpresser/create-pr", ...cmdArgs],
-                {
-                  cwd: root,
-                  name: "xterm-256color",
-                  env: process.env as Record<string, string>,
-                },
-              );
-
-              term.onData((data: string) => {
-                buffer += data;
-                // Auto-answer interactive prompts:
-                // "Do you want to edit the pull request title? (y/n)"  -> n
-                // "Do you want to edit the pull request description? (y/n)" -> n
-                // "Do you want to create this pull request? (y/n)" -> y
-                if (
-                  /edit the pull request (title|description)\?\s*\(y\/n\)\s*$/i.test(
-                    buffer,
-                  )
-                ) {
-                  term.write("n\n");
-                  buffer = "";
-                } else if (
-                  /create this pull request\?\s*\(y\/n\)\s*$/i.test(buffer)
-                ) {
-                  term.write("y\n");
-                  buffer = "";
-                }
-              });
-
-              term.onExit(({ exitCode }: { exitCode: number }) => {
-                clearTimeout(timeout);
-                if (exitCode === 0) {
-                  resolve(buffer);
-                } else {
-                  resolve(buffer); // Still return output for error diagnosis
-                }
-              });
+          return new Promise<string>((resolve) => {
+            const terminal = new Terminal("bunx", cmdArgs, {
+              cwd: root,
+              name: "xterm-256color",
+              env: process.env as Record<string, string>,
             });
 
-            // Strip ANSI escape codes for clean output
-            const clean = output.replace(
-              /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07/g,
-              "",
-            );
+            const output: string[] = [];
+            let resolved = false;
+            const timeout = setTimeout(() => {
+              if (!resolved) {
+                resolved = true;
+                terminal.kill();
+                resolve(
+                  `PR creation timed out after 180s.\n\n${output.map(stripAnsi).join("\n")}`,
+                );
+              }
+            }, 180_000);
 
-            const prUrlMatch = clean.match(
-              /https:\/\/dev\.azure\.com\/[^\s]+\/pullrequest\/\d+/,
-            );
+            terminal.onData((data: string) => {
+              output.push(data);
+              const clean = stripAnsi(data);
 
-            if (prUrlMatch) {
-              return `PR created successfully!\nURL: ${prUrlMatch[0]}\n\n${clean}`;
-            }
+              // Auto-answer interactive prompts
+              if (/edit the pull request title\?/i.test(clean)) {
+                terminal.write("n\n");
+              } else if (/edit the pull request description\?/i.test(clean)) {
+                terminal.write("n\n");
+              } else if (/create (the )?pull request\?/i.test(clean)) {
+                terminal.write("y\n");
+              }
+            });
 
-            return (
-              clean || "PR creation completed (no URL detected in output)."
-            );
-          } catch (e: any) {
-            if (e.message?.includes("timeout")) {
-              return "PR creation timed out after 120s. The CLI may be stuck.";
-            }
-            return `PR creation error: ${e.message}`;
-          }
+            terminal.onExit(({ exitCode }: { exitCode: number }) => {
+              if (resolved) return;
+              resolved = true;
+              clearTimeout(timeout);
+
+              const fullOutput = output.map(stripAnsi).join("\n");
+
+              // Try to extract PR URL
+              const urlMatch = fullOutput.match(
+                /https:\/\/dev\.azure\.com[^\s)]+/,
+              );
+
+              if (exitCode === 0 && urlMatch) {
+                const titleMatch = fullOutput.match(/Title:\s*(.+)/);
+                const lines = [`PR created: ${urlMatch[0]}`];
+                if (titleMatch) lines.push(`Title: ${titleMatch[1].trim()}`);
+                if (args.draft) lines.push("(draft)");
+                resolve(lines.join("\n"));
+              } else if (exitCode === 0) {
+                const lines = fullOutput
+                  .split("\n")
+                  .filter(
+                    (l) =>
+                      l.trim().length > 0 &&
+                      !l.includes("┌") &&
+                      !l.includes("└") &&
+                      !l.includes("│") &&
+                      !l.includes("─") &&
+                      !/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(l),
+                  );
+                resolve(lines.slice(-10).join("\n"));
+              } else {
+                const errorLines = fullOutput
+                  .split("\n")
+                  .filter(
+                    (l) =>
+                      l.toLowerCase().includes("error") ||
+                      l.toLowerCase().includes("fail") ||
+                      l.toLowerCase().includes("invalid") ||
+                      l.toLowerCase().includes("unauthorized"),
+                  );
+                resolve(
+                  `PR creation failed (exit code: ${exitCode}).\n${errorLines.length > 0 ? errorLines.join("\n") : fullOutput.slice(-500)}`,
+                );
+              }
+            });
+          });
         },
       }),
 
@@ -568,78 +775,145 @@ export const TensorTools: Plugin = async ({ $, directory }) => {
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       "run-tests": tool({
         description:
-          "Run tests using yarn test. For watch mode, starts a background PTY session. " +
-          "For non-watch mode, runs tests and returns results with pass/fail summary.",
+          "Run the project test suite using yarn test. " +
+          "Optionally scope to a specific package name. " +
+          "Returns a compact summary on success, detailed failures on error.",
         args: {
           package: tool.schema.optional(tool.schema.string()),
           watch: tool.schema.optional(tool.schema.boolean()),
           coverage: tool.schema.optional(tool.schema.boolean()),
         },
         async execute(args) {
-          const yarnArgs = ["test"];
-          if (args.package) yarnArgs.push(args.package);
-          if (args.coverage) yarnArgs.push("--coverage");
-
           if (args.watch) {
-            // Use PTY for watch mode (long-running)
             const existing = manager.findByTitle("Test Watch");
             if (existing) manager.kill(existing.id);
 
-            const watchArgs = [...yarnArgs, "--", "--watch"];
+            const cmdArgs = ["test"];
+            if (args.package) cmdArgs.push(args.package);
+            cmdArgs.push("--", "--watch");
+
             const session = manager.spawn({
               command: "yarn",
-              args: watchArgs,
+              args: cmdArgs,
               cwd: root,
               title: "Test Watch",
             });
 
             await new Promise((r) => setTimeout(r, 3000));
-            const lines = session.buffer.slice(-20).map(stripAnsi).join("\n");
+            const buf = session.buffer.slice(-10).map(stripAnsi).join("\n");
 
             return [
-              "Test watch mode started.",
-              `Session ID: ${session.id}`,
-              `PID: ${session.pid}`,
+              `Test watch started.`,
+              `Session: ${session.id} (pid: ${session.pid})`,
               "",
-              "Recent output:",
-              lines || "(starting...)",
-              "",
-              "Use server-logs to monitor test output.",
+              buf || "(starting...)",
             ].join("\n");
           }
 
-          // Non-watch: run to completion
+          const cmdArgs = ["test"];
+          if (args.package) cmdArgs.push(args.package);
+          if (args.coverage) cmdArgs.push("--", "--coverage");
+
           try {
-            const result = await $`cd ${root} && yarn ${yarnArgs} 2>&1`
+            const result = await $`cd ${root} && yarn ${cmdArgs} 2>&1`
               .nothrow()
               .quiet();
-            const output = result.stdout.toString();
+            const raw = stripAnsi(result.stdout.toString());
+            const lines = raw.split("\n");
 
-            // Extract summary
-            const summaryLines = output
-              .split("\n")
-              .filter(
-                (l) =>
-                  /Tests?:/.test(l) ||
-                  /Suites?:/.test(l) ||
-                  /Snapshots?:/.test(l) ||
-                  /Time:/.test(l) ||
-                  /PASS|FAIL/.test(l),
-              )
-              .map(stripAnsi);
+            if (result.exitCode === 0) {
+              // Check for Lerna/Nx summary (monorepo run)
+              const lernaMatch = raw.match(
+                /Successfully ran target test for (\d+) projects/,
+              );
 
-            const summary =
-              summaryLines.length > 0
-                ? summaryLines.join("\n")
-                : output.slice(-2000);
+              if (lernaMatch) {
+                // Aggregate all individual test results across projects
+                let totalTests = 0;
+                let totalSuites = 0;
+                for (const line of lines) {
+                  const tm = line.match(/Tests:\s+(\d+) passed,\s*(\d+) total/);
+                  if (tm) totalTests += parseInt(tm[2]);
+                  const sm = line.match(
+                    /Test Suites:\s+(\d+) passed,\s*(\d+) total/,
+                  );
+                  if (sm) totalSuites += parseInt(sm[2]);
+                }
+                const cached = raw.match(/(\d+) out of \d+ tasks/);
+                const cacheNote = cached ? ` (${cached[1]} cached)` : "";
+                return `Tests PASSED. ${lernaMatch[1]} projects${cacheNote}. Tests: ${totalTests} passed, ${totalTests} total. Test Suites: ${totalSuites} passed, ${totalSuites} total.`;
+              }
 
-            const status = result.exitCode === 0 ? "PASSED" : "FAILED";
+              // Single package run
+              const testLine = lines.find((l) => /Tests:\s+\d+/.test(l));
+              const suiteLine = lines.find((l) => /Test Suites:\s+\d+/.test(l));
+              const timeLine = lines.find((l) => /Time:\s+/.test(l));
 
-            return [
-              `Tests ${status} (exit code: ${result.exitCode})`,
-              "",
-              summary,
-            ].join("\n");
+              if (testLine && suiteLine) {
+                const parts = [
+                  "Tests PASSED.",
+                  testLine.trim(),
+                  suiteLine.trim(),
+                ];
+                if (timeLine) parts.push(timeLine.trim());
+                return parts.join(" ");
+              }
+
+              return `Tests passed (exit code: 0). ${lines.length} lines of output.`;
+            }
+
+            // Failure — detailed output
+            // For monorepo: find last (most relevant) summary lines
+            const testLines = lines.filter((l) => /Tests:\s+\d+/.test(l));
+            const suiteLines = lines.filter((l) =>
+              /Test Suites:\s+\d+/.test(l),
+            );
+            const summary = testLines[testLines.length - 1];
+            const suiteSummary = suiteLines[suiteLines.length - 1];
+            const failedSuites = lines.filter(
+              (l) =>
+                l.includes("FAIL ") &&
+                (l.includes("packages/") || l.includes("apps/")),
+            );
+
+            const failureBlocks: string[] = [];
+            let inBlock = false;
+            for (const line of lines) {
+              if (line.match(/^\s*●\s/)) {
+                inBlock = true;
+                failureBlocks.push(line);
+              } else if (inBlock) {
+                if (
+                  line.trim() === "" &&
+                  failureBlocks.length > 0 &&
+                  !failureBlocks[failureBlocks.length - 1]?.trim()
+                ) {
+                  inBlock = false;
+                } else {
+                  failureBlocks.push(line);
+                }
+              }
+            }
+
+            const output: string[] = [
+              `Tests FAILED (exit code: ${result.exitCode}).`,
+            ];
+            if (summary) output.push(summary.trim());
+            if (suiteSummary) output.push(suiteSummary.trim());
+            output.push("");
+
+            if (failedSuites.length > 0) {
+              output.push("Failed suites:");
+              failedSuites.forEach((s) => output.push(`  ${s.trim()}`));
+              output.push("");
+            }
+
+            if (failureBlocks.length > 0) {
+              output.push("Failure details:");
+              output.push(...failureBlocks.slice(0, 200));
+            }
+
+            return output.join("\n");
           } catch (e: any) {
             return `Test execution error: ${e.message}`;
           }
