@@ -93,6 +93,40 @@ const RunTestsConfigSchema = z.object({
   args: z.array(z.string()).default(["test"]),
 });
 
+const WorkItemConfigSchema = z.object({
+  provider: z.enum(["azure-devops"]).default("azure-devops"),
+  apiVersion: z.string().default("7.0"),
+  fields: z
+    .array(z.string())
+    .default([
+      "System.Id",
+      "System.Title",
+      "System.WorkItemType",
+      "System.State",
+      "System.AssignedTo",
+      "System.Description",
+      "System.Tags",
+      "System.IterationPath",
+      "System.AreaPath",
+      "Microsoft.VSTS.Common.AcceptanceCriteria",
+      "Microsoft.VSTS.Scheduling.StoryPoints",
+      "Microsoft.VSTS.TCM.TestingDetails",
+      "Microsoft.VSTS.Common.Priority",
+      "Microsoft.VSTS.Scheduling.Effort",
+    ])
+    .describe("Work item fields to fetch"),
+  relatedFields: z
+    .array(z.string())
+    .default([
+      "System.Id",
+      "System.Title",
+      "System.WorkItemType",
+      "System.State",
+      "System.AssignedTo",
+    ])
+    .describe("Fields to fetch for related work items (lightweight)"),
+});
+
 const BuildStatusConfigSchema = z.object({
   provider: z.enum(["azure-devops"]).default("azure-devops"),
   command: z.string().default("az"),
@@ -116,6 +150,7 @@ const ToolsEnabledSchema = z.object({
   "create-pr": z.boolean().default(false),
   "run-tests": z.boolean().default(true),
   "build-status": z.boolean().default(false),
+  "work-item": z.boolean().default(false),
 });
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────
@@ -132,6 +167,7 @@ export const DEFAULT_TOOLS_ENABLED = {
   "create-pr": false,
   "run-tests": true,
   "build-status": false,
+  "work-item": false,
 } as const satisfies z.input<typeof ToolsEnabledSchema>;
 
 const DEFAULT_DEV_SERVER = {
@@ -213,6 +249,36 @@ const DEFAULT_RUN_TESTS = {
   args: ["test"],
 } as const satisfies z.input<typeof RunTestsConfigSchema>;
 
+const DEFAULT_WORK_ITEM = {
+  provider: "azure-devops",
+  apiVersion: "7.0",
+  fields: [
+    "System.Id",
+    "System.Title",
+    "System.WorkItemType",
+    "System.State",
+    "System.AssignedTo",
+    "System.Description",
+    "System.Tags",
+    "System.IterationPath",
+    "System.AreaPath",
+    "Microsoft.VSTS.Common.AcceptanceCriteria",
+    "Microsoft.VSTS.Scheduling.StoryPoints",
+    "Microsoft.VSTS.TCM.TestingDetails",
+    "Microsoft.VSTS.Common.Priority",
+    "Microsoft.VSTS.Scheduling.Effort",
+    "Microsoft.VSTS.TCM.ReproSteps",
+    "VectorVest.Common.RequirementLinks",
+  ],
+  relatedFields: [
+    "System.Id",
+    "System.Title",
+    "System.WorkItemType",
+    "System.State",
+    "System.AssignedTo",
+  ],
+} as const satisfies z.input<typeof WorkItemConfigSchema>;
+
 const DEFAULT_BUILD_STATUS = {
   provider: "azure-devops",
   command: "az",
@@ -234,6 +300,7 @@ export const DevToolsConfigSchema = z.object({
   createPr: CreatePrConfigSchema.default(DEFAULT_CREATE_PR),
   runTests: RunTestsConfigSchema.default(DEFAULT_RUN_TESTS),
   buildStatus: BuildStatusConfigSchema.default(DEFAULT_BUILD_STATUS),
+  workItem: WorkItemConfigSchema.default(DEFAULT_WORK_ITEM),
 });
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -296,6 +363,11 @@ export const TOOL_METADATA: Record<
     label: "Build Status",
     hint: "Monitor CI/CD pipeline status",
     configKey: "buildStatus",
+  },
+  "work-item": {
+    label: "Work Item",
+    hint: "Fetch Azure DevOps work item details",
+    configKey: "workItem",
   },
 };
 

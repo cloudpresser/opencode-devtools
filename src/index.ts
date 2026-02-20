@@ -9,6 +9,7 @@ import { createGenerateTool } from "./tools/generate";
 import { createPrTool } from "./tools/create-pr";
 import { createRunTestsTool } from "./tools/run-tests";
 import { createBuildStatusTool } from "./tools/build-status";
+import { createWorkItemTool } from "./tools/work-item";
 
 // ─── Plugin Entry Point ──────────────────────────────────────────────────────
 
@@ -50,6 +51,10 @@ export const DevTools: Plugin = async (input) => {
   }
   if (enabled["build-status"]) {
     const [name, def] = createBuildStatusTool(config, manager, directory, $);
+    tool[name] = def;
+  }
+  if (enabled["work-item"]) {
+    const [name, def] = createWorkItemTool(config, directory, $);
     tool[name] = def;
   }
 
