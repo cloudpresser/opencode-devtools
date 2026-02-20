@@ -127,6 +127,26 @@ const WorkItemConfigSchema = z.object({
     .describe("Fields to fetch for related work items (lightweight)"),
 });
 
+const GetPrConfigSchema = z.object({
+  provider: z.enum(["azure-devops"]).default("azure-devops"),
+  watchInterval: z
+    .number()
+    .default(15)
+    .describe("Seconds between polls in watch mode"),
+  watchTimeout: z
+    .number()
+    .default(1800)
+    .describe("Max seconds to wait for builds (30 min)"),
+  waitForBuilds: z
+    .array(z.string())
+    .default(["Project Tensor", "iOS Mobile App"])
+    .describe("Build name substring patterns to wait for completion"),
+  noWaitBuilds: z
+    .array(z.string())
+    .default(["PR Validation"])
+    .describe("Build name substring patterns to report but not wait for"),
+});
+
 const BuildStatusConfigSchema = z.object({
   provider: z.enum(["azure-devops"]).default("azure-devops"),
   command: z.string().default("az"),
@@ -151,6 +171,7 @@ const ToolsEnabledSchema = z.object({
   "run-tests": z.boolean().default(true),
   "build-status": z.boolean().default(false),
   "work-item": z.boolean().default(false),
+  "get-pr": z.boolean().default(false),
 });
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────
@@ -168,6 +189,7 @@ export const DEFAULT_TOOLS_ENABLED = {
   "run-tests": true,
   "build-status": false,
   "work-item": false,
+  "get-pr": false,
 } as const satisfies z.input<typeof ToolsEnabledSchema>;
 
 const DEFAULT_DEV_SERVER = {
@@ -279,6 +301,14 @@ const DEFAULT_WORK_ITEM = {
   ],
 } as const satisfies z.input<typeof WorkItemConfigSchema>;
 
+const DEFAULT_GET_PR = {
+  provider: "azure-devops",
+  watchInterval: 15,
+  watchTimeout: 1800,
+  waitForBuilds: ["Project Tensor", "iOS Mobile App"],
+  noWaitBuilds: ["PR Validation"],
+} as const satisfies z.input<typeof GetPrConfigSchema>;
+
 const DEFAULT_BUILD_STATUS = {
   provider: "azure-devops",
   command: "az",
@@ -301,6 +331,7 @@ export const DevToolsConfigSchema = z.object({
   runTests: RunTestsConfigSchema.default(DEFAULT_RUN_TESTS),
   buildStatus: BuildStatusConfigSchema.default(DEFAULT_BUILD_STATUS),
   workItem: WorkItemConfigSchema.default(DEFAULT_WORK_ITEM),
+  getPr: GetPrConfigSchema.default(DEFAULT_GET_PR),
 });
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -368,6 +399,11 @@ export const TOOL_METADATA: Record<
     label: "Work Item",
     hint: "Fetch Azure DevOps work item details",
     configKey: "workItem",
+  },
+  "get-pr": {
+    label: "Get PR",
+    hint: "Fetch PR metadata and watch builds",
+    configKey: "getPr",
   },
 };
 
