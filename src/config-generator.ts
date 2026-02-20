@@ -4,6 +4,7 @@ import {
   DevToolsConfigSchema,
   type ToolKey,
 } from "./config";
+import { getProviderNames } from "./providers";
 
 // ─── Config Generator ─────────────────────────────────────────────────────────
 // Generates a .devtools.jsonc string from a set of enabled tool keys.
@@ -37,9 +38,18 @@ const commentOut = (str: string): string =>
  * - Disabled tools: full defaults emitted as commented-out JSONC
  * - All values derived from DevToolsConfigSchema.parse({})
  */
-export const generateConfig = (enabledTools: Set<string>): string => {
-  const defaults = DevToolsConfigSchema.parse({});
+export const generateConfig = (
+  enabledTools: Set<string>,
+  provider: string = "azure-devops",
+): string => {
+  const defaults = DevToolsConfigSchema.parse({ provider });
   const lines: string[] = ["{"];
+
+  // ── Provider field ──
+  const providerNames = getProviderNames();
+  lines.push(`  // Source control provider: ${providerNames.join(" | ")}`);
+  lines.push(`  "provider": "${provider}",`);
+  lines.push("");
 
   // ── Tools section ──
   lines.push("  // Enable/disable tools");

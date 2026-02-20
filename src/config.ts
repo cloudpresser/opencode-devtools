@@ -2,6 +2,7 @@ import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import stripJsonComments from "strip-json-comments";
+import { getProviderNames } from "./providers";
 
 // ─── Server Config Schema ────────────────────────────────────────────────────
 
@@ -94,7 +95,6 @@ const RunTestsConfigSchema = z.object({
 });
 
 const WorkItemConfigSchema = z.object({
-  provider: z.enum(["azure-devops"]).default("azure-devops"),
   apiVersion: z.string().default("7.0"),
   fields: z
     .array(z.string())
@@ -128,7 +128,6 @@ const WorkItemConfigSchema = z.object({
 });
 
 const GetPrConfigSchema = z.object({
-  provider: z.enum(["azure-devops"]).default("azure-devops"),
   watchInterval: z
     .number()
     .default(15)
@@ -148,9 +147,6 @@ const GetPrConfigSchema = z.object({
 });
 
 const BuildStatusConfigSchema = z.object({
-  provider: z.enum(["azure-devops"]).default("azure-devops"),
-  command: z.string().default("az"),
-  args: z.array(z.string()).default(["pipelines", "runs", "list"]),
   topBuilds: z.number().default(3),
   watchInterval: z
     .number()
@@ -167,11 +163,11 @@ const ToolsEnabledSchema = z.object({
   "check-types": z.boolean().default(true),
   lint: z.boolean().default(true),
   generate: z.boolean().default(false),
-  "create-pr": z.boolean().default(false),
+  "create-pr": z.boolean().default(true),
   "run-tests": z.boolean().default(true),
-  "build-status": z.boolean().default(false),
-  "work-item": z.boolean().default(false),
-  "get-pr": z.boolean().default(false),
+  "build-status": z.boolean().default(true),
+  "work-item": z.boolean().default(true),
+  "get-pr": z.boolean().default(true),
 });
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────
@@ -185,11 +181,11 @@ export const DEFAULT_TOOLS_ENABLED = {
   "check-types": true,
   lint: true,
   generate: false,
-  "create-pr": false,
+  "create-pr": true,
   "run-tests": true,
-  "build-status": false,
-  "work-item": false,
-  "get-pr": false,
+  "build-status": true,
+  "work-item": true,
+  "get-pr": true,
 } as const satisfies z.input<typeof ToolsEnabledSchema>;
 
 const DEFAULT_DEV_SERVER = {
@@ -272,7 +268,6 @@ const DEFAULT_RUN_TESTS = {
 } as const satisfies z.input<typeof RunTestsConfigSchema>;
 
 const DEFAULT_WORK_ITEM = {
-  provider: "azure-devops",
   apiVersion: "7.0",
   fields: [
     "System.Id",
@@ -302,7 +297,6 @@ const DEFAULT_WORK_ITEM = {
 } as const satisfies z.input<typeof WorkItemConfigSchema>;
 
 const DEFAULT_GET_PR = {
-  provider: "azure-devops",
   watchInterval: 15,
   watchTimeout: 1800,
   waitForBuilds: ["Project Tensor", "iOS Mobile App"],
@@ -310,9 +304,6 @@ const DEFAULT_GET_PR = {
 } as const satisfies z.input<typeof GetPrConfigSchema>;
 
 const DEFAULT_BUILD_STATUS = {
-  provider: "azure-devops",
-  command: "az",
-  args: ["pipelines", "runs", "list"],
   topBuilds: 3,
   watchInterval: 30,
   defaultBranch: "main",
@@ -321,6 +312,14 @@ const DEFAULT_BUILD_STATUS = {
 // ─── Root Config Schema ──────────────────────────────────────────────────────
 
 export const DevToolsConfigSchema = z.object({
+  provider: z
+    .string()
+    .default("azure-devops")
+    .describe(
+      "Source-control / work-tracking provider. " +
+        "Valid values: " +
+        getProviderNames().join(", "),
+    ),
   tools: ToolsEnabledSchema.default(DEFAULT_TOOLS_ENABLED),
   devServer: DevServerConfigSchema.default(DEFAULT_DEV_SERVER),
   serverLogs: ServerLogsConfigSchema.default(DEFAULT_SERVER_LOGS),
@@ -397,7 +396,7 @@ export const TOOL_METADATA: Record<
   },
   "work-item": {
     label: "Work Item",
-    hint: "Fetch Azure DevOps work item details",
+    hint: "Fetch work item / issue details (provider-dependent)",
     configKey: "workItem",
   },
   "get-pr": {

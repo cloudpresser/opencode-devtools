@@ -4,6 +4,7 @@ import {
   intro,
   outro,
   multiselect,
+  select,
   confirm,
   isCancel,
   cancel,
@@ -14,6 +15,9 @@ import { join } from "node:path";
 import stripJsonComments from "strip-json-comments";
 import { DEFAULT_TOOLS_ENABLED, TOOL_METADATA, type ToolKey } from "./config";
 import { generateConfig } from "./config-generator";
+// Side-effect import — registers all provider adapters
+import "./providers";
+import { getProviderNames } from "./providers";
 
 const CONFIG_FILE = ".devtools.jsonc";
 const TOOL_KEYS = Object.keys(DEFAULT_TOOLS_ENABLED) as ToolKey[];
@@ -55,6 +59,22 @@ const run = async () => {
     }
   }
 
+  // ── Provider selection ──
+  const providerNames = getProviderNames();
+  const chosenProvider = await select({
+    message: "Select your source-control provider:",
+    options: providerNames.map((name) => ({
+      value: name,
+      label: name,
+    })),
+    initialValue: providerNames[0],
+  });
+
+  if (isCancel(chosenProvider)) {
+    cancel("Setup cancelled.");
+    process.exit(0);
+  }
+
   // ── Tool selection ──
   const initialValues = TOOL_KEYS.filter((key) =>
     existing ? existing.has(key) : DEFAULT_TOOLS_ENABLED[key],
@@ -78,7 +98,7 @@ const run = async () => {
   const enabledTools = new Set(selected as string[]);
 
   // ── Generate and write config ──
-  const config = generateConfig(enabledTools);
+  const config = generateConfig(enabledTools, chosenProvider as string);
   writeFileSync(configPath, config, "utf-8");
 
   const enabledCount = enabledTools.size;
