@@ -4,7 +4,11 @@
   "description": "OpenCode plugin providing dev server, testing, type checking, PR creation, and build status tools",
   "main": "src/index.ts",
   "type": "module",
+  "bin": {
+    "devtools": "src/cli.ts"
+  },
   "dependencies": {
+    "@clack/prompts": "^0.10.0",
     "@opencode-ai/plugin": "^1.1.60",
     "bun-pty": "^0.4.8",
     "strip-json-comments": "^5.0.1"

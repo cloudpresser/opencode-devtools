@@ -123,7 +123,7 @@ const ToolsEnabledSchema = z.object({
 // Default values for the root config — provided explicitly so TypeScript
 // can verify the literal types against each sub-schema.
 
-const DEFAULT_TOOLS_ENABLED = {
+export const DEFAULT_TOOLS_ENABLED = {
   "dev-server": true,
   "server-logs": true,
   "check-types": true,
@@ -222,7 +222,9 @@ const DEFAULT_BUILD_STATUS = {
   defaultBranch: "main",
 } as const satisfies z.input<typeof BuildStatusConfigSchema>;
 
-const DevToolsConfigSchema = z.object({
+// ─── Root Config Schema ──────────────────────────────────────────────────────
+
+export const DevToolsConfigSchema = z.object({
   tools: ToolsEnabledSchema.default(DEFAULT_TOOLS_ENABLED),
   devServer: DevServerConfigSchema.default(DEFAULT_DEV_SERVER),
   serverLogs: ServerLogsConfigSchema.default(DEFAULT_SERVER_LOGS),
@@ -239,6 +241,63 @@ const DevToolsConfigSchema = z.object({
 export type DevToolsConfig = z.infer<typeof DevToolsConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type ToolsEnabled = z.infer<typeof ToolsEnabledSchema>;
+
+// ─── Tool Metadata ────────────────────────────────────────────────────────────
+// Human-readable labels and hints for each tool. Used by the setup CLI.
+// TypeScript enforces completeness: adding a tool to DEFAULT_TOOLS_ENABLED
+// without a metadata entry causes a compile error.
+
+export type ToolKey = keyof typeof DEFAULT_TOOLS_ENABLED;
+
+export const TOOL_METADATA: Record<
+  ToolKey,
+  {
+    label: string;
+    hint: string;
+    configKey: keyof Omit<DevToolsConfig, "tools"> | null;
+  }
+> = {
+  "dev-server": {
+    label: "Dev Server",
+    hint: "Start Expo/Next.js dev servers",
+    configKey: "devServer",
+  },
+  "server-logs": {
+    label: "Server Logs",
+    hint: "Read logs from running dev servers",
+    configKey: "serverLogs",
+  },
+  "check-types": {
+    label: "Check Types",
+    hint: "Run TypeScript type checking",
+    configKey: "checkTypes",
+  },
+  lint: {
+    label: "Lint",
+    hint: "Run the project linter",
+    configKey: "lint",
+  },
+  generate: {
+    label: "Generate",
+    hint: "Scaffold features, views, models, etc.",
+    configKey: "generate",
+  },
+  "create-pr": {
+    label: "Create PR",
+    hint: "Create pull requests via CLI",
+    configKey: "createPr",
+  },
+  "run-tests": {
+    label: "Run Tests",
+    hint: "Execute test suite",
+    configKey: "runTests",
+  },
+  "build-status": {
+    label: "Build Status",
+    hint: "Monitor CI/CD pipeline status",
+    configKey: "buildStatus",
+  },
+};
 
 // ─── Load Config ─────────────────────────────────────────────────────────────
 
