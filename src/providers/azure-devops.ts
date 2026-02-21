@@ -12,6 +12,7 @@ import type {
   PrReviewer,
   PrPolicy,
   PrWorkItem,
+  PrCommentThread,
 } from "./types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,6 +62,33 @@ const parseWorkItemInput = (input: string): ParsedWorkItem | null => {
 
   if (!id) return null;
 
+  const orgMatch = input.match(
+    /https?:\/\/dev\.azure\.com(?:\.mcas\.ms)?\/([^/]+)\/([^/]+)/i,
+  );
+  const org = orgMatch ? `https://dev.azure.com/${orgMatch[1]}` : undefined;
+  const project = orgMatch ? orgMatch[2] : undefined;
+
+  return { id, org, project };
+};
+
+type ParsedPrInput = {
+  id: number;
+  org?: string;
+  project?: string;
+};
+
+const parsePrInput = (input: string): ParsedPrInput | null => {
+  const num = parseInt(input, 10);
+  if (!isNaN(num) && String(num) === input.trim()) return { id: num };
+
+  // Match PR URLs like:
+  //   https://dev.azure.com/Org/Project/_git/Repo/pullrequest/12345
+  //   https://dev.azure.com.mcas.ms/Org/Project/_git/Repo/pullrequest/12345
+  const prIdPattern = /\/pullrequest\/(\d+)/i;
+  const match = input.match(prIdPattern);
+  if (!match) return null;
+
+  const id = parseInt(match[1], 10);
   const orgMatch = input.match(
     /https?:\/\/dev\.azure\.com(?:\.mcas\.ms)?\/([^/]+)\/([^/]+)/i,
   );
@@ -471,13 +499,27 @@ const azureDevOps: Provider = {
   // ── Fetch PR ──────────────────────────────────────────────────────────
 
   async fetchPr(ref, config, root, $) {
-    const prId = parseInt(ref, 10);
-    if (isNaN(prId)) {
-      throw new Error(`Invalid PR ID: "${ref}". Provide a numeric PR ID.`);
+    const parsed = parsePrInput(ref);
+    if (!parsed) {
+      throw new Error(
+        `Could not parse PR ID from: "${ref}". Provide a numeric ID or Azure DevOps PR URL.`,
+      );
     }
+    const prId = parsed.id;
 
-    const repo = await this.resolveRepo(root, $);
-    const { org } = repo;
+    let repo: RepoInfo;
+    try {
+      repo = await this.resolveRepo(root, $);
+    } catch {
+      repo = { org: "", project: "" };
+    }
+    const org = parsed.org || repo.org;
+
+    if (!org) {
+      throw new Error(
+        "Could not determine organization. Provide a PR URL or set AZURE_DEVOPS_ORG env var.",
+      );
+    }
 
     // Fetch PR metadata
     const prResult =
@@ -598,6 +640,98 @@ const azureDevOps: Provider = {
       labels: (pr.labels || []).map((l: any) => l.name),
       repository: pr.repository?.name,
     };
+  },
+
+  // ── Fetch PR Comments ──────────────────────────────────────────────────
+
+  async fetchPrComments(ref, _config, root, $) {
+    const parsed = parsePrInput(ref);
+    if (!parsed) {
+      throw new Error(
+        `Could not parse PR ID from: "${ref}". Provide a numeric ID or Azure DevOps PR URL.`,
+      );
+    }
+    const prId = parsed.id;
+
+    let repo: RepoInfo;
+    try {
+      repo = await this.resolveRepo(root, $);
+    } catch {
+      repo = { org: "", project: "" };
+    }
+    const org = parsed.org || repo.org;
+    const project = parsed.project || repo.project;
+
+    if (!org || !project) {
+      throw new Error(
+        "Could not determine organization/project. Provide a PR URL or set AZURE_DEVOPS_ORG and AZURE_DEVOPS_PROJECT env vars.",
+      );
+    }
+
+    // Resolve the repository name from the PR metadata
+    const prResult =
+      await $`az repos pr show --id ${prId} --org ${org} --output json`
+        .nothrow()
+        .quiet();
+    if (prResult.exitCode !== 0) {
+      throw new Error(
+        `Failed to fetch PR #${prId}: ${prResult.stderr?.toString().trim() || "No output"}`,
+      );
+    }
+    const pr = JSON.parse(prResult.stdout.toString().trim());
+    const repoId = pr.repository?.id || pr.repository?.name;
+    if (!repoId) {
+      throw new Error(
+        `Could not determine repository for PR #${prId}.`,
+      );
+    }
+
+    // Fetch comment threads via az devops invoke (REST: pullRequests/{prId}/threads)
+    const result =
+      await $`az devops invoke --area git --resource pullRequestThreads --route-parameters project=${project} repositoryId=${repoId} pullRequestId=${prId} --org ${org} --api-version 7.1 --output json`
+        .nothrow()
+        .quiet();
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `Failed to fetch PR comment threads (exit ${result.exitCode}):\n${result.stdout.toString().slice(0, 2000)}`,
+      );
+    }
+
+    let data: any;
+    try {
+      data = JSON.parse(result.stdout.toString());
+    } catch {
+      throw new Error(
+        `Failed to parse comment threads response:\n${result.stdout.toString().slice(0, 2000)}`,
+      );
+    }
+
+    const rawThreads: any[] = data.value || data || [];
+
+    const threads: PrCommentThread[] = [];
+    for (const thread of rawThreads) {
+      const comments = (thread.comments || []).filter(
+        (c: any) => c.commentType !== "system",
+      );
+      if (comments.length === 0) continue;
+
+      const ctx = thread.threadContext;
+      threads.push({
+        id: thread.id,
+        status: thread.status || "unknown",
+        filePath: ctx?.filePath || null,
+        line:
+          ctx?.rightFileEnd?.line || ctx?.rightFileStart?.line || null,
+        comments: comments.map((c: any) => ({
+          author: c.author?.displayName || "Unknown",
+          content: c.content || "",
+          date: c.publishedDate || "",
+        })),
+      });
+    }
+
+    return threads;
   },
 };
 

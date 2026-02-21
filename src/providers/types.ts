@@ -90,6 +90,21 @@ export interface PrResult {
   repository?: string;
 }
 
+export interface PrComment {
+  author: string;
+  content: string;
+  date: string;
+}
+
+export interface PrCommentThread {
+  id: number | string;
+  /** "active" | "fixed" | "closed" | "wontFix" | "byDesign" | "pending" | "unknown" */
+  status: string;
+  filePath: string | null;
+  line: number | null;
+  comments: PrComment[];
+}
+
 // ─── Provider Interface ──────────────────────────────────────────────────────
 
 export interface Provider {
@@ -129,4 +144,11 @@ export interface Provider {
     root: string,
     $: any,
   ): Promise<PrResult>;
+
+  fetchPrComments(
+    ref: string,
+    config: any,
+    root: string,
+    $: any,
+  ): Promise<PrCommentThread[]>;
 }

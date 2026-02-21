@@ -155,6 +155,13 @@ const BuildStatusConfigSchema = z.object({
   defaultBranch: z.string().default("main"),
 });
 
+const PrCommentsConfigSchema = z.object({
+  activeOnly: z
+    .boolean()
+    .default(false)
+    .describe("Show only active (unresolved) threads by default"),
+});
+
 // ─── Tool Enable/Disable ─────────────────────────────────────────────────────
 
 const ToolsEnabledSchema = z.object({
@@ -168,6 +175,7 @@ const ToolsEnabledSchema = z.object({
   "build-status": z.boolean().default(true),
   "work-item": z.boolean().default(true),
   "get-pr": z.boolean().default(true),
+  "pr-comments": z.boolean().default(true),
 });
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────
@@ -186,6 +194,7 @@ export const DEFAULT_TOOLS_ENABLED = {
   "build-status": true,
   "work-item": true,
   "get-pr": true,
+  "pr-comments": true,
 } as const satisfies z.input<typeof ToolsEnabledSchema>;
 
 const DEFAULT_DEV_SERVER = {
@@ -309,6 +318,10 @@ const DEFAULT_BUILD_STATUS = {
   defaultBranch: "main",
 } as const satisfies z.input<typeof BuildStatusConfigSchema>;
 
+const DEFAULT_PR_COMMENTS = {
+  activeOnly: false,
+} as const satisfies z.input<typeof PrCommentsConfigSchema>;
+
 // ─── Root Config Schema ──────────────────────────────────────────────────────
 
 export const DevToolsConfigSchema = z.object({
@@ -331,6 +344,7 @@ export const DevToolsConfigSchema = z.object({
   buildStatus: BuildStatusConfigSchema.default(DEFAULT_BUILD_STATUS),
   workItem: WorkItemConfigSchema.default(DEFAULT_WORK_ITEM),
   getPr: GetPrConfigSchema.default(DEFAULT_GET_PR),
+  prComments: PrCommentsConfigSchema.default(DEFAULT_PR_COMMENTS),
 });
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -403,6 +417,11 @@ export const TOOL_METADATA: Record<
     label: "Get PR",
     hint: "Fetch PR metadata and watch builds",
     configKey: "getPr",
+  },
+  "pr-comments": {
+    label: "PR Comments",
+    hint: "Fetch PR review comment threads",
+    configKey: "prComments",
   },
 };
 

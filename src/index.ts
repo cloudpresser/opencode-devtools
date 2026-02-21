@@ -11,6 +11,7 @@ import { createRunTestsTool } from "./tools/run-tests";
 import { createBuildStatusTool } from "./tools/build-status";
 import { createWorkItemTool } from "./tools/work-item";
 import { createGetPrTool } from "./tools/get-pr";
+import { createPrCommentsTool } from "./tools/pr-comments";
 // Side-effect import — registers all provider adapters (azure-devops, github, etc.)
 import "./providers";
 
@@ -62,6 +63,10 @@ export const DevTools: Plugin = async (input) => {
   }
   if (enabled["get-pr"]) {
     const [name, def] = createGetPrTool(config, directory, $);
+    tool[name] = def;
+  }
+  if (enabled["pr-comments"]) {
+    const [name, def] = createPrCommentsTool(config, directory, $);
     tool[name] = def;
   }
 

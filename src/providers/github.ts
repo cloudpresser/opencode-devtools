@@ -10,6 +10,7 @@ import type {
   PrReviewer,
   PrPolicy,
   PrWorkItem,
+  PrCommentThread,
 } from "./types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -361,6 +362,102 @@ const github: Provider = {
       workItems,
       labels: (pr.labels || []).map((l: any) => l.name),
     };
+  },
+
+  // ── Fetch PR Comments ──────────────────────────────────────────────────
+
+  async fetchPrComments(ref, _config, root, $) {
+    const parsed = parseRef(ref);
+    if (!parsed) {
+      throw new Error(
+        `Invalid PR reference: "${ref}". Provide a number or GitHub PR URL.`,
+      );
+    }
+
+    const repo = await this.resolveRepo(root, $);
+    const repoSlug = `${repo.org}/${repo.project}`;
+    const prNumber = parsed.number;
+
+    // Fetch review comments (file-level) and issue comments (top-level) in parallel
+    const [reviewResult, issueResult] = await Promise.all([
+      $`gh api repos/${repoSlug}/pulls/${prNumber}/comments --paginate 2>&1`
+        .nothrow()
+        .quiet(),
+      $`gh api repos/${repoSlug}/issues/${prNumber}/comments --paginate 2>&1`
+        .nothrow()
+        .quiet(),
+    ]);
+
+    const threads: PrCommentThread[] = [];
+
+    // Parse review comments (these are file-level, on specific lines)
+    if (reviewResult.exitCode === 0) {
+      try {
+        const reviews: any[] = JSON.parse(reviewResult.stdout.toString());
+
+        // Group review comments by in_reply_to_id to form threads
+        const threadMap = new Map<number, any[]>();
+        const topLevel: any[] = [];
+
+        for (const c of reviews) {
+          if (c.in_reply_to_id) {
+            const list = threadMap.get(c.in_reply_to_id) || [];
+            list.push(c);
+            threadMap.set(c.in_reply_to_id, list);
+          } else {
+            topLevel.push(c);
+          }
+        }
+
+        for (const root of topLevel) {
+          const replies = threadMap.get(root.id) || [];
+          const allComments = [root, ...replies];
+
+          threads.push({
+            id: root.id,
+            status: root.position != null ? "active" : "unknown",
+            filePath: root.path || null,
+            line: root.original_line || root.line || null,
+            comments: allComments.map((c: any) => ({
+              author: c.user?.login || "Unknown",
+              content: c.body || "",
+              date: c.created_at || "",
+            })),
+          });
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    // Parse issue-level comments (general PR comments, not on specific files)
+    if (issueResult.exitCode === 0) {
+      try {
+        const issueComments: any[] = JSON.parse(
+          issueResult.stdout.toString(),
+        );
+
+        for (const c of issueComments) {
+          threads.push({
+            id: c.id,
+            status: "active",
+            filePath: null,
+            line: null,
+            comments: [
+              {
+                author: c.user?.login || "Unknown",
+                content: c.body || "",
+                date: c.created_at || "",
+              },
+            ],
+          });
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    return threads;
   },
 };
 
