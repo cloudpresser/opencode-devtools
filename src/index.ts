@@ -12,6 +12,11 @@ import { createBuildStatusTool } from "./tools/build-status";
 import { createWorkItemTool } from "./tools/work-item";
 import { createGetPrTool } from "./tools/get-pr";
 import { createPrCommentsTool } from "./tools/pr-comments";
+import {
+  createPushQueueScheduleTool,
+  createPushQueueLogsTool,
+  createPushQueueJobsTool,
+} from "./tools/push-queue";
 // Side-effect import — registers all provider adapters (azure-devops, github, etc.)
 import "./providers";
 
@@ -68,6 +73,14 @@ export const DevTools: Plugin = async (input) => {
   if (enabled["pr-comments"]) {
     const [name, def] = createPrCommentsTool(config, directory, $);
     tool[name] = def;
+  }
+  if (enabled["push-queue"]) {
+    const [n1, d1] = createPushQueueScheduleTool(config, directory, $);
+    const [n2, d2] = createPushQueueLogsTool(config, directory, $);
+    const [n3, d3] = createPushQueueJobsTool(config, directory, $);
+    tool[n1] = d1;
+    tool[n2] = d2;
+    tool[n3] = d3;
   }
 
   return { tool };

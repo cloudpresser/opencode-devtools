@@ -146,6 +146,24 @@ const GetPrConfigSchema = z.object({
     .describe("Build name substring patterns to report but not wait for"),
 });
 
+const PrCommentsConfigSchema = z.object({
+  activeOnly: z
+    .boolean()
+    .default(false)
+    .describe("Show only active (unresolved) threads by default"),
+});
+
+const PushQueueConfigSchema = z.object({
+  defaultInterval: z
+    .number()
+    .default(30)
+    .describe("Default cron interval in minutes"),
+  defaultRemote: z
+    .string()
+    .default("origin")
+    .describe("Default git remote name"),
+});
+
 const BuildStatusConfigSchema = z.object({
   topBuilds: z.number().default(3),
   watchInterval: z
@@ -153,13 +171,6 @@ const BuildStatusConfigSchema = z.object({
     .default(30)
     .describe("Seconds between polls in watch mode"),
   defaultBranch: z.string().default("main"),
-});
-
-const PrCommentsConfigSchema = z.object({
-  activeOnly: z
-    .boolean()
-    .default(false)
-    .describe("Show only active (unresolved) threads by default"),
 });
 
 // ─── Tool Enable/Disable ─────────────────────────────────────────────────────
@@ -176,6 +187,7 @@ const ToolsEnabledSchema = z.object({
   "work-item": z.boolean().default(true),
   "get-pr": z.boolean().default(true),
   "pr-comments": z.boolean().default(true),
+  "push-queue": z.boolean().default(true),
 });
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────
@@ -195,6 +207,7 @@ export const DEFAULT_TOOLS_ENABLED = {
   "work-item": true,
   "get-pr": true,
   "pr-comments": true,
+  "push-queue": true,
 } as const satisfies z.input<typeof ToolsEnabledSchema>;
 
 const DEFAULT_DEV_SERVER = {
@@ -322,6 +335,11 @@ const DEFAULT_PR_COMMENTS = {
   activeOnly: false,
 } as const satisfies z.input<typeof PrCommentsConfigSchema>;
 
+const DEFAULT_PUSH_QUEUE = {
+  defaultInterval: 30,
+  defaultRemote: "origin",
+} as const satisfies z.input<typeof PushQueueConfigSchema>;
+
 // ─── Root Config Schema ──────────────────────────────────────────────────────
 
 export const DevToolsConfigSchema = z.object({
@@ -345,6 +363,7 @@ export const DevToolsConfigSchema = z.object({
   workItem: WorkItemConfigSchema.default(DEFAULT_WORK_ITEM),
   getPr: GetPrConfigSchema.default(DEFAULT_GET_PR),
   prComments: PrCommentsConfigSchema.default(DEFAULT_PR_COMMENTS),
+  pushQueue: PushQueueConfigSchema.default(DEFAULT_PUSH_QUEUE),
 });
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -422,6 +441,11 @@ export const TOOL_METADATA: Record<
     label: "PR Comments",
     hint: "Fetch PR review comment threads",
     configKey: "prComments",
+  },
+  "push-queue": {
+    label: "Push Queue",
+    hint: "Schedule trickle-push cron jobs for git branches",
+    configKey: "pushQueue",
   },
 };
 
