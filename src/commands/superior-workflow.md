@@ -65,6 +65,26 @@ Spike conclusions MUST include:
 | Max in-progress   | 2 sub-tasks at any given time            |
 | Completion        | Closed only after PR review is approved  |
 
+### Distributing parent story points
+
+When the parent work item has Story Points, distribute them across
+the dev tasks proportionally as RemainingWork (hours):
+
+- 1 story point ≈ 1 business day ≈ 8 hours
+- Use the parent's total story points as the budget
+- Each task's RemainingWork should reflect its share
+
+Example (3 story points ≈ 24 hours):
+
+- Task 1 (small fix): RemainingWork = 4 (0.5 day)
+- Task 2 (larger refactor): RemainingWork = 8 (1 day)
+- Task 3 (stability fix): RemainingWork = 4 (0.5 day)
+- Task 4 (defense in depth): RemainingWork = 4 (0.5 day)
+- Remaining 4 hours buffer for review/iteration
+
+Once set, each task's RemainingWork is the source of truth for
+scheduling — the parent story points are not referenced again.
+
 ### Task description template
 
 Every dev task description MUST contain all context to execute

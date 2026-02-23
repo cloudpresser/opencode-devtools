@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DevToolsConfig } from "../config";
+import type { WorkItemResult } from "../providers/types";
 import { getProvider } from "../providers";
 import { formatWorkItemResult } from "../tools/work-item";
 
@@ -101,16 +102,17 @@ export const createCommandHook = (
     const workItemId = parseWorkItemId(rawArgs);
 
     let workItemContext = "";
+    let workItemResult: WorkItemResult | null = null;
     if (workItemId) {
       try {
         const provider = getProvider(config.provider);
-        const result = await provider.fetchWorkItem(
+        workItemResult = await provider.fetchWorkItem(
           workItemId,
           config.workItem,
           root,
           $,
         );
-        workItemContext = formatWorkItemResult(result, config.workItem);
+        workItemContext = formatWorkItemResult(workItemResult, config.workItem);
       } catch (e: any) {
         // Fallback: let the agent fetch manually via the work-item tool
         workItemContext = [
@@ -131,9 +133,16 @@ export const createCommandHook = (
     // Inject context into template
     template = template.replace("{{WORK_ITEM_CONTEXT}}", workItemContext);
 
-    // For superior-execute: inject session directory for absolute path reminders
+    // For superior-execute: inject session directory and remaining work hours
     if (commandName === "superior-execute") {
       template = template.replaceAll("{{SESSION_DIRECTORY}}", root);
+
+      const remainingWork =
+        workItemResult?.fields?.["Microsoft.VSTS.Scheduling.RemainingWork"];
+      template = template.replaceAll(
+        "{{REMAINING_WORK}}",
+        remainingWork != null ? String(remainingWork) : "unknown",
+      );
     }
 
     // Replace output parts with our enriched prompt

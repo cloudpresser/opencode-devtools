@@ -44,14 +44,14 @@ const parseCronJobs = async ($: any) => {
 // ─── Scheduling Logic ─────────────────────────────────────────────────────────
 
 /** Random integer in [min, max] inclusive. */
-const randBetween = (min: number, max: number) =>
+export const randBetween = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
 /**
  * Given a starting Date, advance to the next business-hour slot.
  * If already within business hours, return as-is.
  */
-function nextBusinessSlot(
+export function nextBusinessSlot(
   from: Date,
   startHour: number,
   endHour: number,
@@ -90,7 +90,7 @@ function nextBusinessSlot(
  * @param startAfter - Schedule commits after this time
  * @param count - Number of slots to generate
  */
-function computeSchedule(
+export function computeSchedule(
   startAfter: Date,
   count: number,
   config: DevToolsConfig["pushQueue"],
@@ -115,6 +115,67 @@ function computeSchedule(
 
     // Ensure we're still in business hours; if not, roll to next day
     cursor = nextBusinessSlot(cursor, startHour, endHour, days);
+  }
+
+  return slots;
+}
+
+/**
+ * Compute a schedule where total wall-clock time is proportional
+ * to estimatedHours, with controlled randomness.
+ *
+ * The fixed part (70%) of each gap dominates, with 30% random
+ * variation. Total time is perturbed by ±15% from the estimate.
+ *
+ * @param startAfter - Schedule commits after this time
+ * @param count - Number of slots to generate
+ * @param estimatedHours - Total estimated hours for the work
+ */
+export function computeProportionalSchedule(
+  startAfter: Date,
+  count: number,
+  estimatedHours: number,
+  config: DevToolsConfig["pushQueue"],
+): Date[] {
+  const {
+    businessHoursStart: startHour,
+    businessHoursEnd: endHour,
+    businessDays: days,
+  } = config;
+
+  const slots: Date[] = [];
+  let cursor = nextBusinessSlot(startAfter, startHour, endHour, days);
+
+  if (count <= 1) {
+    slots.push(new Date(cursor));
+    return slots;
+  }
+
+  // Perturb total by ±15%
+  const perturbation = (Math.random() * 0.3 - 0.15) * estimatedHours;
+  const totalMinutes = (estimatedHours + perturbation) * 60;
+
+  // Generate (count - 1) proportional gaps
+  const numGaps = count - 1;
+  const baseGap = totalMinutes / numGaps;
+  const rawGaps: number[] = [];
+
+  for (let i = 0; i < numGaps; i++) {
+    // 70% fixed + 30% random → fixed part dominates
+    rawGaps.push(baseGap * (0.7 + 0.3 * Math.random()));
+  }
+
+  // Normalize so gaps sum to totalMinutes
+  const rawSum = rawGaps.reduce((a, b) => a + b, 0);
+  const scale = totalMinutes / rawSum;
+  const gaps = rawGaps.map((g) => g * scale);
+
+  // Build schedule
+  slots.push(new Date(cursor));
+  for (let i = 0; i < numGaps; i++) {
+    cursor = new Date(cursor.getTime() + gaps[i]! * 60_000);
+    cursor = nextBusinessSlot(cursor, startHour, endHour, days);
+    slots.push(new Date(cursor));
   }
 
   return slots;
@@ -198,13 +259,23 @@ export function createPushQueueScheduleTool(
         "The tool automatically rewrites author dates — the user does NOT need to set " +
         "dates manually.\n\n" +
         "If there are already queued commits on other branches, new commits are " +
-        "scheduled after the last existing slot to avoid suspicious clustering.",
+        "scheduled after the last existing slot to avoid suspicious clustering.\n\n" +
+        "Optionally pass estimatedHours to space commits proportionally across the " +
+        "estimated duration instead of using uniform random spacing.",
       args: {
         branch: tool.schema.string(
           "Branch name to queue (e.g. 'feature/my-thing'). Defaults to current branch if omitted.",
         ),
         remote: tool.schema.optional(
           tool.schema.string("Git remote name (default: 'origin')"),
+        ),
+        estimatedHours: tool.schema.optional(
+          tool.schema.number(
+            "Estimated hours for this work. When provided, commits are " +
+              "spaced proportionally across the estimated duration (±15% " +
+              "perturbation, 70/30 fixed/random ratio) instead of using " +
+              "the default uniform spacing.",
+          ),
         ),
       },
       async execute(args) {
@@ -289,7 +360,14 @@ export function createPushQueueScheduleTool(
         );
 
         // Compute the schedule
-        const schedule = computeSchedule(startFrom, count, pqConfig);
+        const schedule = args.estimatedHours
+          ? computeProportionalSchedule(
+              startFrom,
+              count,
+              args.estimatedHours,
+              pqConfig,
+            )
+          : computeSchedule(startFrom, count, pqConfig);
 
         // Rewrite author dates using git filter-branch
         // Build the date map: SHA -> new ISO date
@@ -324,10 +402,28 @@ export function createPushQueueScheduleTool(
         }
 
         // Set up cron job
+        // NOTE: We write the cron entry via a temp file instead of using
+        // BunShell's `echo` because BunShell auto-escapes `$()` in
+        // interpolated values, which would break the shell date expansion
+        // in the log redirect path.
         const logFile = `/tmp/git-push-${branch}-$(date +%Y%m%d).log`;
         const cronLine = `*/${cronInterval} * * * * ${scriptPath} ${branch} ${remote} ${root} >> ${logFile} 2>&1 # tensor:${CRON_TAG_PREFIX}${branch}`;
+        const tmpCron = `/tmp/.push-queue-cron-${Date.now()}.tmp`;
 
-        await $`(crontab -l 2>/dev/null; echo ${cronLine}) | crontab -`;
+        try {
+          const existing = await $`crontab -l 2>/dev/null`.nothrow().text();
+          fs.writeFileSync(
+            tmpCron,
+            existing.trimEnd() + "\n" + cronLine + "\n",
+          );
+          await $`crontab ${tmpCron}`;
+        } finally {
+          try {
+            fs.unlinkSync(tmpCron);
+          } catch {
+            // ignore cleanup errors
+          }
+        }
 
         const firstDate = toLocalISOString(schedule[0]!);
         const lastDate = toLocalISOString(schedule[schedule.length - 1]!);
@@ -335,7 +431,10 @@ export function createPushQueueScheduleTool(
         return (
           `Queued ${count} commits on '${branch}' for trickle-push:\n\n` +
           `Schedule: ${firstDate} → ${lastDate}\n` +
-          `Spacing:  ${pqConfig.minSpacing}–${pqConfig.maxSpacing} min (random)\n` +
+          (args.estimatedHours
+            ? `Estimate: ${args.estimatedHours}h (proportional spacing, ±15% perturbation)\n`
+            : "") +
+          `Spacing:  ${args.estimatedHours ? "proportional to estimate" : `${pqConfig.minSpacing}–${pqConfig.maxSpacing} min (random)`}\n` +
           `Hours:    ${pqConfig.businessHoursStart}:00–${pqConfig.businessHoursEnd}:00, ` +
           `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].filter((_, i) => pqConfig.businessDays.includes(i)).join("/")}\n` +
           `Cron:     every ${cronInterval} min (polls for ready commits)\n` +

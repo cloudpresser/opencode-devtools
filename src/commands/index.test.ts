@@ -85,7 +85,9 @@ const mockFetchWorkItem = mock(async () => ({
   assignedTo: "Luiz Ozorio",
   description: "Wrong password causing hang-up",
   url: "https://dev.azure.com/VectorVest/VectorVest/_workitems/edit/71036",
-  fields: {},
+  fields: {
+    "Microsoft.VSTS.Scheduling.RemainingWork": 4.0,
+  },
   relations: [],
 }));
 
@@ -323,6 +325,7 @@ describe("createCommandHook", () => {
 
       expect(output.parts[0].text).not.toContain("{{WORK_ITEM_CONTEXT}}");
       expect(output.parts[0].text).not.toContain("{{SESSION_DIRECTORY}}");
+      expect(output.parts[0].text).not.toContain("{{REMAINING_WORK}}");
     });
   });
 
@@ -353,6 +356,99 @@ describe("createCommandHook", () => {
       );
 
       expect(output.parts[0].text).not.toContain("SESSION_DIRECTORY");
+    });
+  });
+
+  describe("remaining work injection (superior-execute only)", () => {
+    it("injects RemainingWork when work item has the field", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("4");
+      expect(output.parts[0].text).not.toContain("{{REMAINING_WORK}}");
+    });
+
+    it("injects 'unknown' when RemainingWork field is missing", async () => {
+      mockFetchWorkItem.mockResolvedValueOnce({
+        id: 71036,
+        title: "Test",
+        type: "Bug",
+        state: "Active",
+        assignedTo: "Test",
+        description: "",
+        url: "",
+        fields: {
+          "Microsoft.VSTS.Scheduling.RemainingWork": undefined as any,
+        },
+        relations: [],
+      });
+
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("unknown");
+      expect(output.parts[0].text).not.toContain("{{REMAINING_WORK}}");
+    });
+
+    it("injects 'unknown' when no work item ID provided", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "" },
+        output,
+      );
+
+      expect(output.parts[0].text).not.toContain("{{REMAINING_WORK}}");
+    });
+
+    it("does NOT inject REMAINING_WORK for superior-workflow", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-workflow", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      // Workflow template doesn't have the placeholder at all
+      expect(output.parts[0].text).not.toContain("REMAINING_WORK");
+    });
+  });
+
+  describe("push-queue references in templates", () => {
+    it("execute template references push-queue-schedule tool", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("push-queue-schedule");
+    });
+
+    it("execute template references estimatedHours", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("estimatedHours");
     });
   });
 

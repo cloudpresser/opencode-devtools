@@ -92,6 +92,25 @@ After PR approval:
 - **Dev tasks:** Close the dev task
 - **Defects:** Move to Ready for QA Review
 
+## Phase 4b: Queue for Trickle-Push
+
+After all commits are made and the PR is created, queue the branch
+for trickle-push using the `push-queue-schedule` tool:
+
+- `branch`: the worktree branch name
+- `estimatedHours`: {{REMAINING_WORK}} (from the task's RemainingWork)
+
+If `{{REMAINING_WORK}}` is "unknown", parse the "Estimated" line
+from the task description:
+
+- "0.5 day" = 4 hours
+- "1 day" = 8 hours
+- "X days" = X \* 8 hours
+
+The tool will distribute commit author dates proportionally across
+the estimated duration during business hours, then a cron job
+pushes them as their timestamps arrive.
+
 ## Phase 5: QA Handoff (last dev task only)
 
 If this is the LAST dev task for the parent work item:
