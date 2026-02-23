@@ -152,8 +152,13 @@ const github: Provider = {
       );
     }
 
-    const repo = await this.resolveRepo(root, $);
-    const repoSlug = `${repo.org}/${repo.project}`;
+    let repoSlug: string;
+    if (parsed.owner && parsed.repo) {
+      repoSlug = `${parsed.owner}/${parsed.repo}`;
+    } else {
+      const repo = await this.resolveRepo(root, $);
+      repoSlug = `${repo.org}/${repo.project}`;
+    }
 
     const result =
       await $`gh issue view ${parsed.number} --repo ${repoSlug} --json number,title,state,assignees,labels,body,milestone,url,closedAt,createdAt,stateReason,comments 2>&1`
@@ -279,8 +284,13 @@ const github: Provider = {
       throw new Error(`Invalid PR reference: "${ref}". Provide a number or GitHub PR URL.`);
     }
 
-    const repo = await this.resolveRepo(root, $);
-    const repoSlug = `${repo.org}/${repo.project}`;
+    let repoSlug: string;
+    if (parsed.owner && parsed.repo) {
+      repoSlug = `${parsed.owner}/${parsed.repo}`;
+    } else {
+      const repo = await this.resolveRepo(root, $);
+      repoSlug = `${repo.org}/${repo.project}`;
+    }
     const prNumber = parsed.number;
 
     // Fetch PR details and checks in parallel
@@ -374,8 +384,13 @@ const github: Provider = {
       );
     }
 
-    const repo = await this.resolveRepo(root, $);
-    const repoSlug = `${repo.org}/${repo.project}`;
+    let repoSlug: string;
+    if (parsed.owner && parsed.repo) {
+      repoSlug = `${parsed.owner}/${parsed.repo}`;
+    } else {
+      const repo = await this.resolveRepo(root, $);
+      repoSlug = `${repo.org}/${repo.project}`;
+    }
     const prNumber = parsed.number;
 
     // Fetch review comments (file-level) and issue comments (top-level) in parallel
