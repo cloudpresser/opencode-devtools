@@ -322,45 +322,11 @@ describe("createCommandHook", () => {
       );
 
       expect(output.parts[0].text).not.toContain("{{WORK_ITEM_CONTEXT}}");
-      expect(output.parts[0].text).not.toContain("{{WORKTREE_ROOT}}");
       expect(output.parts[0].text).not.toContain("{{SESSION_DIRECTORY}}");
     });
   });
 
-  describe("worktree path injection (superior-execute only)", () => {
-    it("injects parent directory as worktree root for regular repos", async () => {
-      const root = "/Users/dev/project";
-      const hook = createCommandHook(testConfig, root, createMockShell(false));
-      const output = createOutput();
-
-      await hook(
-        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
-        output,
-      );
-
-      const expectedRoot = join(root, "..");
-      expect(output.parts[0].text).toContain(expectedRoot);
-      expect(output.parts[0].text).toContain(
-        `git worktree add "${expectedRoot}/<branch-name>"`,
-      );
-    });
-
-    it("injects repo directory as worktree root for bare repos", async () => {
-      const root = "/Users/dev/project.git";
-      const hook = createCommandHook(testConfig, root, createMockShell(true));
-      const output = createOutput();
-
-      await hook(
-        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
-        output,
-      );
-
-      // Bare repo: worktree root IS the root dir itself
-      expect(output.parts[0].text).toContain(
-        `git worktree add "${root}/<branch-name>"`,
-      );
-    });
-
+  describe("session directory injection (superior-execute only)", () => {
     it("injects session directory for absolute path reminders", async () => {
       const root = "/Users/dev/project";
       const hook = createCommandHook(testConfig, root, createMockShell(false));
@@ -376,28 +342,7 @@ describe("createCommandHook", () => {
       );
     });
 
-    it("defaults to non-bare when git command fails", async () => {
-      const root = "/Users/dev/project";
-      // Shell that throws on git command
-      const failShell: any = () => ({
-        text: async () => {
-          throw new Error("git not found");
-        },
-      });
-      const hook = createCommandHook(testConfig, root, failShell);
-      const output = createOutput();
-
-      await hook(
-        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
-        output,
-      );
-
-      // Should default to non-bare (parent dir)
-      const expectedRoot = join(root, "..");
-      expect(output.parts[0].text).toContain(expectedRoot);
-    });
-
-    it("does NOT inject worktree paths for superior-workflow", async () => {
+    it("does NOT inject session directory for superior-workflow", async () => {
       const root = "/Users/dev/project";
       const hook = createCommandHook(testConfig, root, createMockShell(false));
       const output = createOutput();
@@ -407,10 +352,33 @@ describe("createCommandHook", () => {
         output,
       );
 
-      // Workflow template should not have worktree-related content
-      // (it doesn't have the placeholders in the first place)
-      expect(output.parts[0].text).not.toContain("WORKTREE_ROOT");
       expect(output.parts[0].text).not.toContain("SESSION_DIRECTORY");
+    });
+  });
+
+  describe("tool references in templates", () => {
+    it("execute template references create-worktree tool", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("create-worktree");
+    });
+
+    it("execute template references remove-worktree tool", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("remove-worktree");
     });
   });
 });

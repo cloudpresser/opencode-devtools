@@ -13,16 +13,14 @@ Execute this dev task end-to-end: branch, red/green testing, PR.
 1. Read the task description above for: branch name, base branch,
    files to modify, approach, acceptance criteria
 2. **ASK the user** to confirm the base branch
-3. Create a git worktree for this task:
-   ```bash
-   git worktree add "{{WORKTREE_ROOT}}/<branch-name>" \
-     -b <branch-name> <base-branch>
-   ```
-4. Set the worktree absolute path as your working directory for
-   ALL subsequent operations:
-   ```
-   WORKTREE_DIR="{{WORKTREE_ROOT}}/<branch-name>"
-   ```
+3. Call the `create-worktree` tool with `branchName` and `baseBranch`.
+   The tool automatically:
+   - Detects bare vs regular repo for worktree placement
+   - Creates the git worktree and branch
+   - Symlinks `node_modules` from the session directory if lockfiles
+     match, or runs `yarn install` if they differ
+4. Use the returned absolute path as `WORKTREE_DIR` for ALL
+   subsequent operations
 
 ### CRITICAL: Absolute Paths Required
 
@@ -30,7 +28,7 @@ The session remains in `{{SESSION_DIRECTORY}}`. There is no way to
 change the session directory programmatically, so you MUST:
 
 - Use the `workdir` parameter for ALL Bash tool calls, set to
-  the worktree absolute path (`WORKTREE_DIR`)
+  `WORKTREE_DIR`
 - Use absolute paths for ALL file tools (Read, Edit, Write, Grep,
   Glob) — resolve paths relative to the worktree directory
 - NEVER use relative paths — they will resolve against the session
@@ -38,9 +36,8 @@ change the session directory programmatically, so you MUST:
 
 Example: To edit `packages/foo/src/bar.ts` in the worktree:
 
-- Read: `{{WORKTREE_ROOT}}/<branch-name>/packages/foo/src/bar.ts`
-- Bash: set `workdir` to `{{WORKTREE_ROOT}}/<branch-name>` with
-  command `yarn check-types`
+- Read: `WORKTREE_DIR/packages/foo/src/bar.ts`
+- Bash: set `workdir` to `WORKTREE_DIR` with command `yarn check-types`
 
 ## Phase 2: Red Commit (failing test)
 
@@ -123,7 +120,8 @@ After completing all phases, inform the user:
 
 > Worktree created at `WORKTREE_DIR`.
 > To continue working in this worktree, run: `/cd WORKTREE_DIR`
-> To clean up when done: `git worktree remove WORKTREE_DIR`
+> To clean up when done, call the `remove-worktree` tool with
+> the branch name. The branch itself is preserved.
 
 ## Rules (mandatory)
 

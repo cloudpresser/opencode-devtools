@@ -17,6 +17,8 @@ import {
   createPushQueueLogsTool,
   createPushQueueJobsTool,
 } from "./tools/push-queue";
+import { createWorktreeTool } from "./tools/create-worktree";
+import { createRemoveWorktreeTool } from "./tools/remove-worktree";
 import { getCommandDefinitions, createCommandHook } from "./commands";
 // Side-effect import — registers all provider adapters (azure-devops, github, etc.)
 import "./providers";
@@ -82,6 +84,13 @@ export const DevTools: Plugin = async (input) => {
     tool[n1] = d1;
     tool[n2] = d2;
     tool[n3] = d3;
+  }
+
+  if (enabled.commands) {
+    const [wn, wd] = createWorktreeTool(config, directory, $);
+    tool[wn] = wd;
+    const [rn, rd] = createRemoveWorktreeTool(config, directory, $);
+    tool[rn] = rd;
   }
 
   // ─── Slash Command Hooks ────────────────────────────────────────────────────

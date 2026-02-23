@@ -131,20 +131,8 @@ export const createCommandHook = (
     // Inject context into template
     template = template.replace("{{WORK_ITEM_CONTEXT}}", workItemContext);
 
-    // For superior-execute: inject worktree path context
+    // For superior-execute: inject session directory for absolute path reminders
     if (commandName === "superior-execute") {
-      let isBare = false;
-      try {
-        const result = await $`git rev-parse --is-bare-repository`.text();
-        isBare = result.trim() === "true";
-      } catch {
-        // Not a git repo or git not available — default to non-bare
-      }
-
-      // Bare repo: worktrees live inside the repo dir (./branchName)
-      // Regular repo: worktrees live as siblings (../branchName)
-      const worktreeRoot = isBare ? root : join(root, "..");
-      template = template.replaceAll("{{WORKTREE_ROOT}}", worktreeRoot);
       template = template.replaceAll("{{SESSION_DIRECTORY}}", root);
     }
 
