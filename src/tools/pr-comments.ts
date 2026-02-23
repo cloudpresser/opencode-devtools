@@ -85,6 +85,7 @@ export function createPrCommentsTool(
           ).length;
 
           const prNumber =
+            args.id.match(/\/pull\/(\d+)/)?.[1] ||
             args.id.match(/pullrequest[s]?\/(\d+)/i)?.[1] ||
             args.id.match(/^\d+$/)?.[0] ||
             args.id;
