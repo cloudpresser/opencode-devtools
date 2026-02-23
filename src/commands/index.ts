@@ -33,7 +33,7 @@ const COMMAND_NAMES = Object.keys(COMMANDS) as CommandName[];
 
 // ─── Work Item ID Parsing ─────────────────────────────────────────────────────
 
-const parseWorkItemId = (input: string): string | null => {
+export const parseWorkItemId = (input: string): string | null => {
   const trimmed = input.trim();
   // Direct numeric ID
   if (/^\d+$/.test(trimmed)) return trimmed;
@@ -130,6 +130,23 @@ export const createCommandHook = (
 
     // Inject context into template
     template = template.replace("{{WORK_ITEM_CONTEXT}}", workItemContext);
+
+    // For superior-execute: inject worktree path context
+    if (commandName === "superior-execute") {
+      let isBare = false;
+      try {
+        const result = await $`git rev-parse --is-bare-repository`.text();
+        isBare = result.trim() === "true";
+      } catch {
+        // Not a git repo or git not available — default to non-bare
+      }
+
+      // Bare repo: worktrees live inside the repo dir (./branchName)
+      // Regular repo: worktrees live as siblings (../branchName)
+      const worktreeRoot = isBare ? root : join(root, "..");
+      template = template.replaceAll("{{WORKTREE_ROOT}}", worktreeRoot);
+      template = template.replaceAll("{{SESSION_DIRECTORY}}", root);
+    }
 
     // Replace output parts with our enriched prompt
     output.parts.length = 0;

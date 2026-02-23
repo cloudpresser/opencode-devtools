@@ -8,17 +8,39 @@ You are executing a dev task following the Superior Workflow.
 
 Execute this dev task end-to-end: branch, red/green testing, PR.
 
-## Phase 1: Setup
+## Phase 1: Setup — Create Worktree
 
 1. Read the task description above for: branch name, base branch,
    files to modify, approach, acceptance criteria
 2. **ASK the user** to confirm the base branch
-3. Create the branch:
+3. Create a git worktree for this task:
    ```bash
-   git checkout <base-branch>
-   git pull
-   git checkout -b <branch-name>
+   git worktree add "{{WORKTREE_ROOT}}/<branch-name>" \
+     -b <branch-name> <base-branch>
    ```
+4. Set the worktree absolute path as your working directory for
+   ALL subsequent operations:
+   ```
+   WORKTREE_DIR="{{WORKTREE_ROOT}}/<branch-name>"
+   ```
+
+### CRITICAL: Absolute Paths Required
+
+The session remains in `{{SESSION_DIRECTORY}}`. There is no way to
+change the session directory programmatically, so you MUST:
+
+- Use the `workdir` parameter for ALL Bash tool calls, set to
+  the worktree absolute path (`WORKTREE_DIR`)
+- Use absolute paths for ALL file tools (Read, Edit, Write, Grep,
+  Glob) — resolve paths relative to the worktree directory
+- NEVER use relative paths — they will resolve against the session
+  directory, not the worktree
+
+Example: To edit `packages/foo/src/bar.ts` in the worktree:
+
+- Read: `{{WORKTREE_ROOT}}/<branch-name>/packages/foo/src/bar.ts`
+- Bash: set `workdir` to `{{WORKTREE_ROOT}}/<branch-name>` with
+  command `yarn check-types`
 
 ## Phase 2: Red Commit (failing test)
 
@@ -29,17 +51,21 @@ test history.
    - **Maestro** (`.yaml`) for E2E / UI behavior
    - **Jest** for unit tests
 2. Verify the test fails
-3. Commit with conventional prefix:
+3. Commit with conventional prefix (run git in `WORKTREE_DIR`):
    ```
    test(<scope>): add failing test for <description>
    ```
+
+Remember: use `workdir` set to `WORKTREE_DIR` for all git and
+yarn commands. Use absolute paths for all file operations.
 
 ## Phase 3: Green Commit (implement fix)
 
 1. Implement the fix per the task description's Approach section
 2. Verify the previously failing test now passes
-3. Run `yarn check-types` and `yarn lint` — fix any issues
-4. Commit with conventional prefix:
+3. Run `yarn check-types` and `yarn lint` in `WORKTREE_DIR` — fix
+   any issues
+4. Commit with conventional prefix (run git in `WORKTREE_DIR`):
    ```
    fix(<scope>): <description>
    ```
@@ -51,7 +77,8 @@ PR workflow end-to-end: create PR, auto-assign reviewer (developer
 with fewest PRs), post notification in Teams channel, and move the
 board card to Ready for Review — all in one step. -->
 
-1. Use the `create-pr` tool to create the PR targeting `staging`
+1. Use the `create-pr` tool to create the PR targeting `staging`.
+   Ensure all git commands run in `WORKTREE_DIR`.
 2. PR title should follow conventional commit format
 3. PR description should reference the work item ID
 4. Assign a reviewer:
@@ -89,6 +116,14 @@ These are ready for testing. @<QA members>
 ```
 
 The agent cannot post to Teams directly — the user must do this.
+
+## Phase 6: Session Handoff
+
+After completing all phases, inform the user:
+
+> Worktree created at `WORKTREE_DIR`.
+> To continue working in this worktree, run: `/cd WORKTREE_DIR`
+> To clean up when done: `git worktree remove WORKTREE_DIR`
 
 ## Rules (mandatory)
 
