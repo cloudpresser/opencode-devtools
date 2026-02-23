@@ -154,14 +154,34 @@ const PrCommentsConfigSchema = z.object({
 });
 
 const PushQueueConfigSchema = z.object({
-  defaultInterval: z
-    .number()
-    .default(30)
-    .describe("Default cron interval in minutes"),
   defaultRemote: z
     .string()
     .default("origin")
     .describe("Default git remote name"),
+  cronInterval: z
+    .number()
+    .default(5)
+    .describe("Cron polling interval in minutes (how often to check for ready commits)"),
+  businessHoursStart: z
+    .number()
+    .default(8)
+    .describe("Business hours start (0-23, inclusive)"),
+  businessHoursEnd: z
+    .number()
+    .default(17)
+    .describe("Business hours end (0-23, exclusive — 17 means last commit can land at ~16:xx)"),
+  businessDays: z
+    .array(z.number())
+    .default([1, 2, 3, 4, 5])
+    .describe("Business days (0=Sun, 1=Mon, ..., 6=Sat)"),
+  minSpacing: z
+    .number()
+    .default(25)
+    .describe("Minimum minutes between scheduled commits"),
+  maxSpacing: z
+    .number()
+    .default(45)
+    .describe("Maximum minutes between scheduled commits"),
 });
 
 const BuildStatusConfigSchema = z.object({
@@ -336,8 +356,13 @@ const DEFAULT_PR_COMMENTS = {
 } as const satisfies z.input<typeof PrCommentsConfigSchema>;
 
 const DEFAULT_PUSH_QUEUE = {
-  defaultInterval: 30,
   defaultRemote: "origin",
+  cronInterval: 5,
+  businessHoursStart: 8,
+  businessHoursEnd: 17,
+  businessDays: [1, 2, 3, 4, 5],
+  minSpacing: 25,
+  maxSpacing: 45,
 } as const satisfies z.input<typeof PushQueueConfigSchema>;
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────

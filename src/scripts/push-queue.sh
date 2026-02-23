@@ -51,7 +51,9 @@ PUSH_UP_TO=""
 
 while IFS=' ' read -r SHA DATE; do
   # Convert author date to epoch
-  EPOCH=$(date -jf '%Y-%m-%dT%H:%M:%S' "$(echo "$DATE" | cut -d'+' -f1 | cut -d'-' -f1-3)" +%s 2>/dev/null || date -d "$DATE" +%s 2>/dev/null || echo 0)
+  # Strip timezone — take first 19 chars: YYYY-MM-DDTHH:MM:SS
+  DATE_LOCAL="${DATE:0:19}"
+  EPOCH=$(date -jf '%Y-%m-%dT%H:%M:%S' "$DATE_LOCAL" +%s 2>/dev/null || date -d "$DATE" +%s 2>/dev/null || echo 0)
   if [[ "$EPOCH" -le "$NOW" ]]; then
     PUSH_UP_TO="$SHA"
     log "  ready: ${SHA:0:10} ($DATE)"
