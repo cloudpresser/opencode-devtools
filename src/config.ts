@@ -161,7 +161,9 @@ const PushQueueConfigSchema = z.object({
   cronInterval: z
     .number()
     .default(5)
-    .describe("Cron polling interval in minutes (how often to check for ready commits)"),
+    .describe(
+      "Cron polling interval in minutes (how often to check for ready commits)",
+    ),
   businessHoursStart: z
     .number()
     .default(8)
@@ -169,7 +171,9 @@ const PushQueueConfigSchema = z.object({
   businessHoursEnd: z
     .number()
     .default(17)
-    .describe("Business hours end (0-23, exclusive — 17 means last commit can land at ~16:xx)"),
+    .describe(
+      "Business hours end (0-23, exclusive — 17 means last commit can land at ~16:xx)",
+    ),
   businessDays: z
     .array(z.number())
     .default([1, 2, 3, 4, 5])
@@ -208,6 +212,7 @@ const ToolsEnabledSchema = z.object({
   "get-pr": z.boolean().default(true),
   "pr-comments": z.boolean().default(true),
   "push-queue": z.boolean().default(true),
+  commands: z.boolean().default(true),
 });
 
 // ─── Root Config Schema ──────────────────────────────────────────────────────
@@ -228,6 +233,7 @@ export const DEFAULT_TOOLS_ENABLED = {
   "get-pr": true,
   "pr-comments": true,
   "push-queue": true,
+  commands: true,
 } as const satisfies z.input<typeof ToolsEnabledSchema>;
 
 const DEFAULT_DEV_SERVER = {
@@ -471,6 +477,11 @@ export const TOOL_METADATA: Record<
     label: "Push Queue",
     hint: "Schedule trickle-push cron jobs for git branches",
     configKey: "pushQueue",
+  },
+  commands: {
+    label: "Slash Commands",
+    hint: "Superior workflow commands (/superior-workflow, /superior-execute)",
+    configKey: null,
   },
 };
 

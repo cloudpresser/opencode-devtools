@@ -72,7 +72,7 @@ export function createWorkItemTool(
 
 // ─── Formatter ────────────────────────────────────────────────────────────────
 
-function formatWorkItemResult(
+export function formatWorkItemResult(
   result: WorkItemResult,
   cfg: DevToolsConfig["workItem"],
 ): string {
@@ -266,9 +266,7 @@ function formatWorkItemResult(
       lines.push(`### ${pluralize(rel, items.length)}`);
       for (const wi of items) {
         const typeTag = wi.type ? `[${wi.type}]` : "";
-        lines.push(
-          `- #${wi.id} ${typeTag} ${wi.title} (${wi.state})`,
-        );
+        lines.push(`- #${wi.id} ${typeTag} ${wi.title} (${wi.state})`);
       }
     }
   }

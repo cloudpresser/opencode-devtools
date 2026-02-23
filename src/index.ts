@@ -17,6 +17,7 @@ import {
   createPushQueueLogsTool,
   createPushQueueJobsTool,
 } from "./tools/push-queue";
+import { getCommandDefinitions, createCommandHook } from "./commands";
 // Side-effect import — registers all provider adapters (azure-devops, github, etc.)
 import "./providers";
 
@@ -83,7 +84,28 @@ export const DevTools: Plugin = async (input) => {
     tool[n3] = d3;
   }
 
-  return { tool };
+  // ─── Slash Command Hooks ────────────────────────────────────────────────────
+  const commandDefs = enabled.commands ? getCommandDefinitions() : null;
+  const commandHook = enabled.commands
+    ? createCommandHook(config, directory, $)
+    : null;
+
+  return {
+    tool,
+
+    config: async (opencodeConfig: any) => {
+      if (commandDefs) {
+        opencodeConfig.command ??= {};
+        Object.assign(opencodeConfig.command, commandDefs);
+      }
+    },
+
+    "command.execute.before": async (input: any, output: any) => {
+      if (commandHook) {
+        await commandHook(input, output);
+      }
+    },
+  };
 };
 
 /** @deprecated Use DevTools instead */
