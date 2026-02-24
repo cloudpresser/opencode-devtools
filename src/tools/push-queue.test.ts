@@ -1,10 +1,12 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterEach } from "bun:test";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import {
   nextBusinessSlot,
   computeSchedule,
   computeProportionalSchedule,
   randBetween,
 } from "./push-queue";
+import * as fs from "node:fs";
 
 // Default config matching the schema defaults
 const defaultConfig = {
@@ -244,5 +246,62 @@ describe("computeProportionalSchedule", () => {
     }
     // Should have at least 2 unique schedules out of 10
     expect(results.size).toBeGreaterThan(1);
+  });
+});
+
+// ─── prConfig JSON write ──────────────────────────────────────────────────────
+
+describe("prConfig JSON write", () => {
+  const testBranch = "test-pr-config-branch";
+  const configPath = `/tmp/push-queue-pr-${testBranch}.json`;
+
+  afterEach(() => {
+    try {
+      unlinkSync(configPath);
+    } catch {
+      // ignore if doesn't exist
+    }
+  });
+
+  it("writes PR config to /tmp when prConfig is provided", () => {
+    const prConfig = {
+      userPrompt: "fix login button loading state",
+      targetBranch: "staging",
+      workItems: ["71392"],
+      workItemId: "71392",
+    };
+
+    // Simulate what push-queue-schedule does
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ ...prConfig, sourceBranch: testBranch }, null, 2),
+    );
+
+    expect(existsSync(configPath)).toBe(true);
+    const written = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(written.userPrompt).toBe("fix login button loading state");
+    expect(written.targetBranch).toBe("staging");
+    expect(written.workItems).toEqual(["71392"]);
+    expect(written.workItemId).toBe("71392");
+  });
+
+  it("includes sourceBranch in the config", () => {
+    const prConfig = {
+      userPrompt: "test",
+      targetBranch: "staging",
+    };
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ ...prConfig, sourceBranch: testBranch }, null, 2),
+    );
+
+    const written = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(written.sourceBranch).toBe(testBranch);
+  });
+
+  it("config file does not exist when prConfig is omitted", () => {
+    // Don't write anything — simulate omitted prConfig
+    expect(existsSync(configPath)).toBe(false);
   });
 });

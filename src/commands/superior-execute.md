@@ -67,38 +67,18 @@ yarn commands. Use absolute paths for all file operations.
    fix(<scope>): <description>
    ```
 
-## Phase 4: Create PR
+## Phase 4: Queue for Trickle-Push with Scheduled PR
 
-<!-- TODO: Build a custom `superior-pr` tool that handles the full
-PR workflow end-to-end: create PR, auto-assign reviewer (developer
-with fewest PRs), post notification in Teams channel, and move the
-board card to Ready for Review — all in one step. -->
-
-1. Use the `create-pr` tool to create the PR targeting `staging`.
-   Ensure all git commands run in `WORKTREE_DIR`.
-2. PR title should follow conventional commit format
-3. PR description should reference the work item ID
-4. Assign a reviewer:
-   - Choose the developer with fewest PRs assigned
-   - If all equal, choose any available developer
-5. Notify in the Superior Engineering Teams channel
-6. Move the task card to **Ready for Review**:
-   ```bash
-   az boards work-item update --id <TASK_ID> --state "Active"
-   ```
-
-After PR approval:
-
-- **Dev tasks:** Close the dev task
-- **Defects:** Move to Ready for QA Review
-
-## Phase 4b: Queue for Trickle-Push
-
-After all commits are made and the PR is created, queue the branch
-for trickle-push using the `push-queue-schedule` tool:
+After all commits are made, queue the branch for trickle-push AND
+scheduled PR creation using the `push-queue-schedule` tool:
 
 - `branch`: the worktree branch name
 - `estimatedHours`: {{REMAINING_WORK}} (from the task's RemainingWork)
+- `prConfig`:
+  - `userPrompt`: concise description of the changes
+  - `targetBranch`: "staging"
+  - `workItems`: array of work item IDs to link (the task ID)
+  - `workItemId`: the task's work item ID (for board card movement)
 
 If `{{REMAINING_WORK}}` is "unknown", parse the "Estimated" line
 from the task description:
@@ -107,9 +87,26 @@ from the task description:
 - "1 day" = 8 hours
 - "X days" = X \* 8 hours
 
-The tool will distribute commit author dates proportionally across
-the estimated duration during business hours, then a cron job
-pushes them as their timestamps arrive.
+The tool will:
+
+1. Rewrite commit dates proportionally across the estimated duration
+2. Save a PR config file
+3. Install a cron job to trickle-push commits during business hours
+4. After the final commit is pushed, the cron job automatically:
+   - Creates the PR via @cloudpresser/create-pr
+   - Moves the task card to Ready for Review (Active)
+   - (Future) Notifies the Teams channel
+
+**Do NOT create a PR manually** — the push-queue handles this
+after the final push.
+
+**Do NOT push manually** — commits must stay local until their
+scheduled push time.
+
+After PR approval:
+
+- **Dev tasks:** Close the dev task
+- **Defects:** Move to Ready for QA Review
 
 ## Phase 5: QA Handoff (last dev task only)
 

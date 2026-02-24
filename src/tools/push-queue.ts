@@ -277,6 +277,26 @@ export function createPushQueueScheduleTool(
               "the default uniform spacing.",
           ),
         ),
+        prConfig: tool.schema.optional(
+          tool.schema.object({
+            userPrompt: tool.schema.string(
+              "Concise description of the changes for AI-generated PR title/description.",
+            ),
+            targetBranch: tool.schema.string(
+              "Branch to merge into (e.g. 'staging').",
+            ),
+            workItems: tool.schema.optional(
+              tool.schema.array(
+                tool.schema.string("Work item ID to link to the PR."),
+              ),
+            ),
+            workItemId: tool.schema.optional(
+              tool.schema.string(
+                "Task work item ID for board card movement after PR creation.",
+              ),
+            ),
+          }),
+        ),
       },
       async execute(args) {
         const pqConfig = config.pushQueue;
@@ -425,6 +445,15 @@ export function createPushQueueScheduleTool(
           }
         }
 
+        // Write PR config for post-push actions (if provided)
+        if (args.prConfig) {
+          const prConfigPath = `/tmp/push-queue-pr-${branch}.json`;
+          fs.writeFileSync(
+            prConfigPath,
+            JSON.stringify({ ...args.prConfig, sourceBranch: branch }, null, 2),
+          );
+        }
+
         const firstDate = toLocalISOString(schedule[0]!);
         const lastDate = toLocalISOString(schedule[schedule.length - 1]!);
 
@@ -438,8 +467,11 @@ export function createPushQueueScheduleTool(
           `Hours:    ${pqConfig.businessHoursStart}:00–${pqConfig.businessHoursEnd}:00, ` +
           `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].filter((_, i) => pqConfig.businessDays.includes(i)).join("/")}\n` +
           `Cron:     every ${cronInterval} min (polls for ready commits)\n` +
-          `Remote:   ${remote}\n\n` +
-          `Commits (rewritten author dates):\n` +
+          `Remote:   ${remote}\n` +
+          (args.prConfig
+            ? `PR:       will be created automatically after final push\n`
+            : "") +
+          `\nCommits (rewritten author dates):\n` +
           commitDetails.join("\n")
         );
       },

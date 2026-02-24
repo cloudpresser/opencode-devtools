@@ -426,7 +426,7 @@ describe("createCommandHook", () => {
     });
   });
 
-  describe("push-queue references in templates", () => {
+  describe("push-queue and PR references in templates", () => {
     it("execute template references push-queue-schedule tool", async () => {
       const hook = createCommandHook(testConfig, "/project", createMockShell());
       const output = createOutput();
@@ -449,6 +449,35 @@ describe("createCommandHook", () => {
       );
 
       expect(output.parts[0].text).toContain("estimatedHours");
+    });
+
+    it("execute template references prConfig", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("prConfig");
+      expect(output.parts[0].text).toContain("userPrompt");
+      expect(output.parts[0].text).toContain("targetBranch");
+      expect(output.parts[0].text).toContain("workItems");
+      expect(output.parts[0].text).toContain("workItemId");
+    });
+
+    it("execute template warns against manual PR creation", async () => {
+      const hook = createCommandHook(testConfig, "/project", createMockShell());
+      const output = createOutput();
+
+      await hook(
+        { command: "superior-execute", sessionID: "s1", arguments: "71036" },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain("Do NOT create a PR manually");
+      expect(output.parts[0].text).toContain("Do NOT push manually");
     });
   });
 
