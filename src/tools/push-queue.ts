@@ -168,7 +168,11 @@ export function computeProportionalSchedule(
   // Normalize so gaps sum to totalMinutes
   const rawSum = rawGaps.reduce((a, b) => a + b, 0);
   const scale = totalMinutes / rawSum;
-  const gaps = rawGaps.map((g) => g * scale);
+  const gaps = rawGaps.map((g) => {
+    const scaled = g * scale;
+    // Enforce minimum spacing — never cluster commits closer than minSpacing
+    return Math.max(scaled, config.minSpacing);
+  });
 
   // Build schedule
   slots.push(new Date(cursor));
@@ -249,15 +253,22 @@ export function createPushQueueScheduleTool(
     "push-queue-schedule",
     tool({
       description:
-        "Queue unpushed commits on a branch to be trickle-pushed during business hours " +
-        "(Mon–Fri 8am–5pm by default). Each commit's author date is rewritten to a " +
-        "random time within business hours, spaced 25–45 minutes apart, so pushes " +
-        "appear as natural work activity. A lightweight cron job then pushes each " +
+        "[REQUIRED FOR PUSH-QUEUE] Queue unpushed commits on a branch to be trickle-pushed " +
+        "during business hours (Mon–Fri 8am–5pm by default). Each commit's author date is " +
+        "rewritten to a random time within business hours, spaced 25–45 minutes apart, so " +
+        "pushes appear as natural work activity. A lightweight cron job then pushes each " +
         "commit once its author date arrives. The cron self-removes when done.\n\n" +
-        "USE THIS when the user says things like 'queue my changes', 'queue this commit', " +
-        "'schedule this push', 'trickle push', or asks to push during business hours. " +
-        "The tool automatically rewrites author dates — the user does NOT need to set " +
-        "dates manually.\n\n" +
+        "CRITICAL: This is the ONLY supported method for push-queue scheduling. " +
+        "NEVER manually set GIT_AUTHOR_DATE or GIT_COMMITTER_DATE for push-queue commits. " +
+        "The tool handles ALL date rewriting automatically.\n\n" +
+        "USE THIS when the user mentions push-queue or scheduling commits:\n" +
+        "  • 'schedule the commits using push-queue'\n" +
+        "  • 'schedule commits' / 'schedule this commit' / 'schedule these commits'\n" +
+        "  • 'queue my changes' / 'queue this commit' / 'queue the commits'\n" +
+        "  • 'schedule this push' / 'schedule the push'\n" +
+        "  • 'trickle push' / 'spread out commits'\n" +
+        "  • 'push during business hours'\n" +
+        "  • ANY mention of scheduling/queueing commits to push-queue\n\n" +
         "If there are already queued commits on other branches, new commits are " +
         "scheduled after the last existing slot to avoid suspicious clustering.\n\n" +
         "Optionally pass estimatedHours to space commits proportionally across the " +
@@ -319,15 +330,50 @@ export function createPushQueueScheduleTool(
         // Make sure script is executable
         await $`chmod +x ${scriptPath}`;
 
-        // Check if job already exists for this branch
-        const existing = await parseCronJobs($);
-        const alreadyExists = existing.some((j: any) => j.branch === branch);
+        // If a job already exists for this branch, remove it so we can
+        // reschedule ALL unpushed commits (existing + newly added).
+        const existingJobs = await parseCronJobs($);
+        const alreadyExists = existingJobs.some(
+          (j: any) => j.branch === branch,
+        );
         if (alreadyExists) {
-          return (
-            `A push-queue job for branch '${branch}' already exists.\n` +
-            `Use push-queue-jobs to check its status, or remove it with:\n` +
-            `  crontab -l | grep -v 'push-queue:${branch}' | crontab -`
-          );
+          const crontab = await $`crontab -l 2>/dev/null`.nothrow().text();
+          const filtered = crontab
+            .split("\n")
+            .filter((l: string) => !l.includes(`push-queue:${branch}`))
+            .join("\n");
+          const tmpClean = `/tmp/.push-queue-clean-${Date.now()}.tmp`;
+          try {
+            fs.writeFileSync(tmpClean, filtered.trimEnd() + "\n");
+            await $`crontab ${tmpClean}`;
+          } finally {
+            try {
+              fs.unlinkSync(tmpClean);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+        }
+
+        // Merge PR configs if rescheduling — combine work items from
+        // the existing config with any new ones being scheduled.
+        if (alreadyExists && args.prConfig) {
+          const existingPrPath = `/tmp/push-queue-pr-${branch}.json`;
+          try {
+            if (fs.existsSync(existingPrPath)) {
+              const prev = JSON.parse(
+                fs.readFileSync(existingPrPath, "utf-8"),
+              );
+              const prevItems: string[] = prev.workItems ?? [];
+              const newItems: string[] = args.prConfig.workItems ?? [];
+              const merged = [...new Set([...prevItems, ...newItems])];
+              if (merged.length > 0) {
+                args.prConfig.workItems = merged;
+              }
+            }
+          } catch {
+            // ignore — will overwrite with new config
+          }
         }
 
         // Determine unpushed commits
@@ -415,10 +461,22 @@ export function createPushQueueScheduleTool(
 
         const envFilter = `case $GIT_COMMIT in\n${cases}\nesac`;
 
+        // Stash uncommitted changes before filter-branch (it aborts on dirty trees)
+        const dirty = (
+          await $`git -C ${root} status --porcelain`.text()
+        ).trim();
+        if (dirty) {
+          await $`git -C ${root} stash --include-untracked`.quiet();
+        }
+
         try {
           await $`git -C ${root} filter-branch -f --env-filter ${envFilter} ${baseRef}..${branch}`;
         } catch (e: any) {
           return `Error rewriting author dates: ${e.message}\n\nYou may need to clean up with: git -C ${root} filter-branch --original refs/original`;
+        } finally {
+          if (dirty) {
+            await $`git -C ${root} stash pop`.quiet().nothrow();
+          }
         }
 
         // Set up cron job

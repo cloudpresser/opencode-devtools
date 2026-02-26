@@ -247,6 +247,46 @@ describe("computeProportionalSchedule", () => {
     // Should have at least 2 unique schedules out of 10
     expect(results.size).toBeGreaterThan(1);
   });
+
+  it("enforces minSpacing even with very small estimatedHours", () => {
+    // 0.1 hours = 6 minutes total — way too small for 2 commits.
+    // The gap floor should clamp to minSpacing (25 min).
+    for (let trial = 0; trial < 20; trial++) {
+      const start = new Date(2026, 1, 23, 9, 0, 0); // Monday 9am
+      const schedule = computeProportionalSchedule(
+        start,
+        2,
+        0.1,
+        defaultConfig,
+      );
+
+      expect(schedule).toHaveLength(2);
+      const gapMs = schedule[1]!.getTime() - schedule[0]!.getTime();
+      const gapMin = gapMs / 60_000;
+      expect(gapMin).toBeGreaterThanOrEqual(defaultConfig.minSpacing);
+    }
+  });
+
+  it("enforces minSpacing for each gap with many commits and tiny estimate", () => {
+    // 0.5 hours = 30 minutes total, but 5 commits = 4 gaps.
+    // Each gap should still be >= 25 min.
+    for (let trial = 0; trial < 10; trial++) {
+      const start = new Date(2026, 1, 23, 9, 0, 0);
+      const schedule = computeProportionalSchedule(
+        start,
+        5,
+        0.5,
+        defaultConfig,
+      );
+
+      expect(schedule).toHaveLength(5);
+      for (let i = 1; i < schedule.length; i++) {
+        const gapMs = schedule[i]!.getTime() - schedule[i - 1]!.getTime();
+        const gapMin = gapMs / 60_000;
+        expect(gapMin).toBeGreaterThanOrEqual(defaultConfig.minSpacing);
+      }
+    }
+  });
 });
 
 // ─── prConfig JSON write ──────────────────────────────────────────────────────
