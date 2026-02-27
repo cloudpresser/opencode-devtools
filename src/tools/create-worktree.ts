@@ -106,8 +106,7 @@ function randomPaneId(len = 4): string {
  */
 export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<string> {
   const { cwd, command, prompt, agentName, agentModel, $ } = opts;
-  const paneId = randomPaneId();
-  const windowName = `${opts.windowName.replace(/\//g, "-").slice(0, 32)}-${paneId}`;
+  const windowName = randomPaneId();
 
   if (!process.env.TMUX) {
     return `Not in tmux. Run manually: cd ${cwd} && opencode`;
