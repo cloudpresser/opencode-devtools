@@ -2,6 +2,7 @@ import { tool } from "@opencode-ai/plugin";
 import { join, resolve } from "node:path";
 import {
   readFileSync,
+  writeFileSync,
   existsSync,
   symlinkSync,
   mkdirSync,
@@ -69,49 +70,68 @@ function shallowCopyNodeModules(sessionDir: string, worktreeDir: string): void {
 
 // ─── Tmux Spawning ────────────────────────────────────────────────────────────
 
-interface SpawnTmuxOptions {
-  worktreeDir: string;
-  branchName: string;
-  prompt?: string;
-  $: any;
-  /** Slash command to run in the new session (default: /superior-work) */
-  workerCommand?: string;
-  /** Agent name (default: "superior-worker") */
-  agentName?: string;
-  /** Model ID (default: "opencode/claude-opus-4-6") */
-  agentModel?: string;
+// ─── Tmux Spawn Primitives ────────────────────────────────────────────────────
+
+export interface SpawnInTmuxResult {
+  /** Human-readable status message. */
+  status: string;
+  /** Pre-generated session ID passed to `opencode run --session`. */
+  sessionId: string;
 }
 
-async function spawnTmuxSession(opts: SpawnTmuxOptions): Promise<string> {
-  const {
-    worktreeDir,
-    branchName,
-    prompt,
-    $,
-    workerCommand,
-    agentName = "superior-worker",
-    agentModel = "opencode/claude-opus-4-6",
-  } = opts;
+export interface SpawnInTmuxOptions {
+  /** Tmux window name (will be sanitized). */
+  windowName: string;
+  /** Working directory for the tmux window. */
+  cwd: string;
+  /** Slash command to dispatch (e.g., "/implement"). */
+  command: string;
+  /** Positional prompt/args for the command. */
+  prompt?: string;
+  /** Agent name (omit to use user's default). */
+  agentName?: string;
+  /** Model ID (omit to use user's default). */
+  agentModel?: string;
+  /** Pre-generated session ID. If omitted, one is generated automatically. */
+  sessionId?: string;
+  /** Bun shell instance. */
+  $: any;
+}
+
+/**
+ * Spawn an `opencode run` session in a new tmux window.
+ * Shared primitive used by both worktree workflows (via createWorktreeDirect)
+ * and direct workflows (via CLI).
+ */
+export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<SpawnInTmuxResult> {
+  const { cwd, command, prompt, agentName, agentModel, $ } = opts;
+  const windowName = opts.windowName.replace(/\//g, "-").slice(0, 40);
+
+  // Pre-generate a deterministic session ID so callers know it before the
+  // process starts. Requires OpenCode with custom session ID support
+  // (Session.create accepts an optional `id` field).
+  const sessionId =
+    opts.sessionId ?? `ses_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
   if (!process.env.TMUX) {
-    return `Not in tmux. Run manually: cd ${worktreeDir} && opencode`;
+    return {
+      status: `Not in tmux. Run manually: cd ${cwd} && opencode`,
+      sessionId,
+    };
   }
 
   try {
-    const windowName = branchName.replace(/\//g, "-").slice(0, 40);
-    // Build the opencode command with --command for proper command dispatch
-    // (fires command.execute.before hook). The work item ID is passed as
-    // a positional message argument (opencode run's message positional).
-    const cmd = (workerCommand || "/superior-work").replace(/^\//, "");
+    const cmd = command.replace(/^\//, "");
 
     // Inject continue_loop_on_deny so the worker doesn't exit on
     // permission rejections (run mode auto-rejects all permission asks).
     const configOverride = JSON.stringify({
       experimental: { continue_loop_on_deny: true },
     });
-    let opencodeCmd =
-      `OPENCODE_CONFIG_CONTENT='${configOverride}' ` +
-      `opencode run --agent ${agentName} --model ${agentModel}`;
+    let opencodeCmd = `OPENCODE_CONFIG_CONTENT='${configOverride}' opencode run`;
+    opencodeCmd += ` --session ${sessionId}`;
+    if (agentName) opencodeCmd += ` --agent ${agentName}`;
+    if (agentModel) opencodeCmd += ` --model ${agentModel}`;
     opencodeCmd += ` --command ${cmd}`;
     if (prompt) {
       const escaped = prompt.replace(/'/g, "'\\''");
@@ -120,13 +140,51 @@ async function spawnTmuxSession(opts: SpawnTmuxOptions): Promise<string> {
     // Append exit code for post-mortem debugging
     opencodeCmd += '; echo "\\n=== EXIT CODE: $? ==="';
 
-    await $`tmux new-window -n ${windowName} -c ${worktreeDir} sh -c ${opencodeCmd}`;
+    // Use Bun.spawn to avoid Bun Shell auto-escaping the command string,
+    // which would mangle the internal quotes and semicolons needed by sh -c.
+    const proc = Bun.spawn(
+      ["tmux", "new-window", "-n", windowName, "-c", cwd, "sh", "-c", opencodeCmd],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    await proc.exited;
+
     // Keep the tmux pane visible after process exits
     await $`tmux set-option -t ${windowName} remain-on-exit on`.nothrow().quiet();
-    return `New OpenCode session spawned in tmux window '${windowName}'.`;
+    return {
+      status: `New OpenCode session spawned in tmux window '${windowName}' (session: ${sessionId}).`,
+      sessionId,
+    };
   } catch (e: any) {
-    return `Failed to spawn tmux window: ${e.message}. Run manually: cd ${worktreeDir} && opencode`;
+    return {
+      status: `Failed to spawn tmux window: ${e.message}. Run manually: cd ${cwd} && opencode`,
+      sessionId,
+    };
   }
+}
+
+/** Worktree-specific wrapper for spawnInTmux. */
+interface SpawnTmuxOptions {
+  worktreeDir: string;
+  branchName: string;
+  prompt?: string;
+  $: any;
+  workerCommand?: string;
+  agentName?: string;
+  agentModel?: string;
+  sessionId?: string;
+}
+
+async function spawnTmuxSession(opts: SpawnTmuxOptions): Promise<SpawnInTmuxResult> {
+  return spawnInTmux({
+    windowName: opts.branchName,
+    cwd: opts.worktreeDir,
+    command: opts.workerCommand || "/implement",
+    prompt: opts.prompt,
+    agentName: opts.agentName || "implement",
+    agentModel: opts.agentModel || "opencode/claude-opus-4-6",
+    sessionId: opts.sessionId,
+    $: opts.$,
+  });
 }
 
 // ─── Core Worktree Creation ───────────────────────────────────────────────────
@@ -136,9 +194,9 @@ export interface WorktreeOptions {
   baseBranch: string;
   prompt?: string;
   worktreeRoot?: string;
-  /** Custom slash command to run in the tmux session (default: /superior-work) */
+  /** Custom slash command to run in the tmux session (default: /implement) */
   workerCommand?: string;
-  /** Agent name to use in the worker session (default: "superior-worker") */
+  /** Agent name to use in the worker session (default: "implement") */
   workerAgentName?: string;
   /** Model ID to use in the worker session (default: "opencode/claude-opus-4-6") */
   workerAgentModel?: string;
@@ -230,7 +288,7 @@ export async function createWorktreeDirect(
           // This handles the common case where the user has the branch checked
           // out in the main working directory (e.g. staging).
           _log.info("worktree", `reuse: spawning worker at ${existingWorktreePath}`);
-          const tmuxStatus = await spawnTmuxSession({
+          const tmuxResult = await spawnTmuxSession({
             worktreeDir: existingWorktreePath,
             branchName,
             prompt,
@@ -241,7 +299,7 @@ export async function createWorktreeDirect(
           });
           return {
             success: true,
-            message: `Branch '${branchName}' already has a worktree at ${existingWorktreePath}. Reusing it.\n${tmuxStatus}`,
+            message: `Branch '${branchName}' already has a worktree at ${existingWorktreePath}. Reusing it.\n${tmuxResult.status}\nWorker session ID: ${tmuxResult.sessionId}`,
             worktreeDir: existingWorktreePath,
           };
         }
@@ -282,11 +340,19 @@ export async function createWorktreeDirect(
         }
       }
     } else {
-      // Original behavior — always create new branch + worktree
-      const result =
-        await $`git -C ${root} worktree add ${worktreeDir} -b ${branchName} ${baseBranch}`
-          .nothrow()
-          .quiet();
+      // Check if branch already exists (e.g. from a previous run)
+      const branchCheck =
+        await $`git -C ${root} rev-parse --verify ${branchName}`.nothrow().quiet();
+      const branchExists = branchCheck.exitCode === 0;
+
+      const result = branchExists
+        ? await $`git -C ${root} worktree add ${worktreeDir} ${branchName}`
+            .nothrow()
+            .quiet()
+        : await $`git -C ${root} worktree add ${worktreeDir} -b ${branchName} ${baseBranch}`
+            .nothrow()
+            .quiet();
+
       if (result.exitCode !== 0) {
         const stderr = result.stderr.toString().trim();
         return {
@@ -372,10 +438,36 @@ export async function createWorktreeDirect(
     // Non-fatal — worker session falls back to defaults
   }
 
+  // 6. Fix relative plugin paths in opencode.json.
+  // The worktree may live at a different directory depth than the source
+  // repo, so relative paths like "../../../some-plugin" break. We resolve
+  // them to absolute paths using the source repo as the base.
+  try {
+    const ocConfigPath = join(worktreeDir, "opencode.json");
+    if (existsSync(ocConfigPath)) {
+      const ocConfig = JSON.parse(readFileSync(ocConfigPath, "utf-8"));
+      if (Array.isArray(ocConfig.plugin)) {
+        let changed = false;
+        ocConfig.plugin = ocConfig.plugin.map((p: string) => {
+          if (typeof p === "string" && p.startsWith(".")) {
+            changed = true;
+            return resolve(root, p);
+          }
+          return p;
+        });
+        if (changed) {
+          writeFileSync(ocConfigPath, JSON.stringify(ocConfig, null, 2) + "\n");
+        }
+      }
+    }
+  } catch {
+    // Non-fatal — plugin may fail to load but worktree is still usable
+  }
+
   // 6. Spawn new OpenCode session in tmux window
   _log.info("worktree", `deps: ${depsStatus}`);
-  _log.info("worktree", `spawning tmux: dir=${worktreeDir} branch=${branchName} prompt=${prompt} workerCmd=${opts.workerCommand ?? "/superior-work"}`);
-  const tmuxStatus = await spawnTmuxSession({
+  _log.info("worktree", `spawning tmux: dir=${worktreeDir} branch=${branchName} prompt=${prompt} workerCmd=${opts.workerCommand ?? "/implement"}`);
+  const tmuxResult = await spawnTmuxSession({
     worktreeDir,
     branchName,
     prompt,
@@ -384,7 +476,7 @@ export async function createWorktreeDirect(
     agentName: opts.workerAgentName,
     agentModel: opts.workerAgentModel,
   });
-  _log.info("worktree", `tmux: ${tmuxStatus}`);
+  _log.info("worktree", `tmux: ${tmuxResult.status}`);
 
   return {
     success: true,
@@ -392,7 +484,8 @@ export async function createWorktreeDirect(
       `Worktree created at: ${worktreeDir}`,
       `Branch: ${branchName} (from ${baseBranch})`,
       `Dependencies: ${depsStatus}`,
-      tmuxStatus,
+      tmuxResult.status,
+      `Worker session ID: ${tmuxResult.sessionId}`,
       "",
       "This session's setup is complete. Implementation continues in the new session.",
     ].join("\n"),
@@ -423,7 +516,7 @@ export function createWorktreeTool(
         prompt: tool.schema
           .optional(tool.schema.string())
           .describe(
-            "Work item ID or arguments to pass to /superior-work in the new tmux session",
+            "Work item ID or arguments to pass to the worker in the new tmux session",
           ),
       },
       async execute(args) {
