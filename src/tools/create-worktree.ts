@@ -98,6 +98,17 @@ export interface SpawnInTmuxOptions {
   $: any;
 }
 
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/** Generate an OpenCode-compatible session ID: ses_ + 12 hex + 14 Base62 */
+function generateSessionId(): string {
+  const hex = crypto.randomUUID().replace(/-/g, "").slice(0, 12).toLowerCase();
+  const bytes = crypto.getRandomValues(new Uint8Array(14));
+  let random = "";
+  for (let i = 0; i < 14; i++) random += BASE62[bytes[i] % 62];
+  return `ses_${hex}${random}`;
+}
+
 /**
  * Spawn an `opencode run` session in a new tmux window.
  * Shared primitive used by both worktree workflows (via createWorktreeDirect)
@@ -110,8 +121,9 @@ export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<SpawnInTmux
   // Pre-generate a deterministic session ID so callers know it before the
   // process starts. Requires OpenCode with custom session ID support
   // (Session.create accepts an optional `id` field).
-  const sessionId =
-    opts.sessionId ?? `ses_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  // Format: ses_ + 12 lowercase hex + 14 Base62 chars
+  const sessionId = opts.sessionId ?? generateSessionId();
+
 
   if (!process.env.TMUX) {
     return {
