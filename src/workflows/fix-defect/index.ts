@@ -14,7 +14,53 @@ import type {
   WorkerContext,
   WorkerContextResult,
 } from "../types";
+import type { AfterWriteHandler } from "../types";
 import { pushQueueConclusion } from "../conclusions";
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const TESTING_GUIDANCE = `### How to Write Tests in This Project
+
+**If the package has no test setup** (no \`"test"\` script in package.json, no *.test.* files):
+
+Use the \`generate\` tool to scaffold test infrastructure:
+\`\`\`
+generate(template: "add-tests", name: "<ComponentName>", parent: "<full/package/path>", testType: "view"|"viewmodel"|"model")
+\`\`\`
+- \`name\`: PascalCase component/class name (e.g. "BreakdownRowView")
+- \`parent\`: Full path from repo root (e.g. "packages/features/Overview/breakdown-row/breakdown-row-view")
+- \`testType\`: "view" for snapshot/className tests, "viewmodel" for ViewModel unit tests, "model" for Model unit tests
+
+This adds jest config, devDependencies, test script, and a test stub automatically.
+
+**If the package already has tests**, follow the existing patterns in that package.
+
+**DO NOT manually configure babel or jest transforms** — the \`@vectorvest/testing-utils\` preset handles all transform config, react-native mocks, and setup automatically.
+
+**Test patterns:**
+- **View (snapshot)**: \`renderer.create(<Component />).toJSON()\` → \`toMatchSnapshot()\`
+- **View (className)**: Render → traverse JSON tree → inspect \`className\` props for Tailwind classes
+- **ViewModel**: \`new ViewModel(mockModel)\` → assert exposed properties/methods
+- **Model**: \`new Model()\` → assert state and behavior
+- **ALWAYS** import from \`@jest/globals\`: \`import { describe, expect, it, jest } from '@jest/globals'\`
+
+**Pure TS utility packages (models, ViewModels, non-RN code):**
+If the \`add-tests\` generator produces babel/Flow parse errors, the package
+likely doesn't need the full RN mock chain. Create a \`jest.config.ts\` manually:
+\`\`\`ts
+export default {
+  clearMocks: true,
+  testEnvironment: 'jest-environment-node',
+  transformIgnorePatterns: [
+    '/node_modules/(?!(@vectorvest|react-native|react-native-.*)/)',
+  ],
+};
+\`\`\`
+And in package.json, remove \`"preset": "@vectorvest/testing-utils"\` and
+\`"testEnvironment": "jsdom"\` from the jest config. Keep only
+\`"scripts": { "test": "jest" }\` and \`"devDependencies": { "@jest/globals": "^29.7.0" }\`.
+
+**Running tests**: \`yarn tensor test <package-name>\` (runs jest scoped to that package)`;
 
 // ─── Resolve (Launcher) ──────────────────────────────────────────────────────
 
@@ -71,6 +117,7 @@ const injectWorkerContext = async (
         PR_ID: "",
         TARGET_BRANCH: "staging",
         REMAINING_WORK: "unknown",
+        TESTING_GUIDANCE: TESTING_GUIDANCE,
       },
     };
   }
@@ -147,8 +194,76 @@ const injectWorkerContext = async (
       PR_ID: prId,
       TARGET_BRANCH: targetBranch,
       REMAINING_WORK: remainingStr,
+      TESTING_GUIDANCE: TESTING_GUIDANCE,
     },
   };
+};
+
+// ─── Workflow Definition ─────────────────────────────────────────────────────
+
+// ─── After-Write Hook ────────────────────────────────────────────────────────
+
+const afterWriteTypeCheckAndTest: AfterWriteHandler = async (ctx) => {
+  const tsFiles = ctx.filePaths.filter((f) => /\.[tj]sx?$/.test(f));
+  if (tsFiles.length === 0) return undefined;
+
+  const results: string[] = [];
+
+  // 1. Type check
+  try {
+    const typeCheck = await ctx.utils
+      .$`yarn check-types 2>&1`
+      .nothrow()
+      .quiet();
+    if (typeCheck.exitCode !== 0) {
+      const output = (
+        typeCheck.stdout?.toString() ||
+        typeCheck.stderr?.toString() ||
+        ""
+      ).trim();
+      const lines = output.split("\n").slice(0, 25).join("\n");
+      results.push(`\n--- TYPE CHECK: ERRORS FOUND ---\n${lines}`);
+    } else {
+      results.push(`\n--- TYPE CHECK: PASSED ---`);
+    }
+  } catch {
+    /* non-fatal */
+  }
+
+  // 2. Run tests for affected packages (let lerna resolve from HEAD)
+  try {
+    const testResult = await ctx.utils
+      .$`yarn test 2>&1`
+      .nothrow()
+      .quiet()
+      .timeout(300_000); // 5 minutes
+
+    const output = (
+      testResult.stdout?.toString() ||
+      testResult.stderr?.toString() ||
+      ""
+    ).trim();
+
+    if (testResult.exitCode !== 0) {
+      const lines = output.split("\n").slice(-30).join("\n");
+      results.push(`\n--- TESTS: FAILING ---\n${lines}`);
+    } else if (!output || output.includes("No packages")) {
+      results.push(`\n--- TESTS: No affected packages found ---`);
+    } else {
+      // Extract summary from lerna output
+      const summaryLine =
+        output.split("\n").find((l: string) => l.includes("lerna success")) ||
+        "All tests passed";
+      results.push(`\n--- TESTS: PASSED (${summaryLine.trim()}) ---`);
+    }
+  } catch (e: any) {
+    if (e.message?.includes("timeout")) {
+      results.push(`\n--- TESTS: TIMED OUT (5 min limit) ---`);
+    }
+    /* else non-fatal */
+  }
+
+  return results.length > 0 ? results.join("\n") : undefined;
 };
 
 // ─── Workflow Definition ─────────────────────────────────────────────────────
@@ -156,13 +271,14 @@ const injectWorkerContext = async (
 export const defectWorkflow: WorkflowDefinition = {
   name: "fix-defect",
   description: "Fix a defect linked to an existing PR",
-  requiredTools: ["work-item", "get-pr", "pr-comments"],
+  requiredTools: ["work-item", "get-pr", "pr-comments", "generate"],
   workerTemplate: "worker.md",
   launcherTemplate: "launcher.md",
   usesWorktree: true,
   resolve,
   injectWorkerContext,
   conclusion: pushQueueConclusion,
+  injectAfterWrite: [afterWriteTypeCheckAndTest],
   agent: {
     name: "defect-worker",
     model: "opencode/claude-opus-4-6",
