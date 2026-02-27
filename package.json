@@ -23,6 +23,7 @@
     "@clack/prompts": "^0.10.0",
     "@opencode-ai/plugin": "^1.1.60",
     "bun-pty": "^0.4.8",
+    "plannotator": "../plannotator/apps/opencode-plugin",
     "strip-json-comments": "^5.0.1"
   },
   "devDependencies": {

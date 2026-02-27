@@ -8,14 +8,6 @@ You are fixing a defect following the Superior Workflow.
 
 {{PARENT_CONTEXT}}
 
-### Pull Request
-
-{{PR_CONTEXT}}
-
-### Active Review Comments
-
-{{PR_COMMENTS}}
-
 {{MEDIA_CONTEXT}}
 
 ## Test Infrastructure Reference
@@ -24,15 +16,13 @@ You are fixing a defect following the Superior Workflow.
 
 ## Your Mission
 
-Fix this defect. The PR already exists — your commits will be
-pushed to the existing branch and update the PR automatically.
+Fix this defect end-to-end: diagnose, red/green testing, commit, queue.
 
 ### Phase 1: Diagnose
 
 1. Read the defect description and reproduction steps carefully
-2. Review the active PR review comments above
-3. Examine the relevant code to understand the root cause
-4. If the defect includes screenshots or videos, study them
+2. Examine the relevant code to understand the root cause
+3. If the defect includes screenshots or videos, study them
    to understand the expected vs actual behavior
 
 ### Phase 2: Test Strategy
@@ -93,8 +83,8 @@ interaction.
 
 ### Phase 4: Session Complete
 
-**Do NOT create a new PR** — the existing PR (#{{PR_ID}}) will be
-updated automatically when commits are pushed.
+**Do NOT create a PR manually** — the push-queue creates the PR
+automatically after the final push.
 **Do NOT push manually** — the conclusion strategy handles push scheduling.
 **Do NOT post work-item comments** — completion comments are posted
 automatically after push-queue scheduling.

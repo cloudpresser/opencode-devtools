@@ -300,6 +300,7 @@ const DEFAULT_GENERATE = {
     "view-story",
     "query-story",
     "mutation-story",
+    "add-tests",
   ],
 } as const satisfies z.input<typeof GenerateConfigSchema>;
 
@@ -480,7 +481,7 @@ export const TOOL_METADATA: Record<
   },
   commands: {
     label: "Slash Commands",
-    hint: "Superior workflow commands (/superior-workflow, /superior-execute)",
+    hint: "Workflow commands (/implement, /fix-defect, /plan, /merge-rebase)",
     configKey: null,
   },
 };

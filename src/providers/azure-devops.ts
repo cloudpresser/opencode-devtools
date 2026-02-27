@@ -6,6 +6,7 @@ import type {
   RepoInfo,
   WorkItemResult,
   WorkItemRelation,
+  WorkItemAttachment,
   BuildRun,
   CreatePrResult,
   PrResult,
@@ -200,6 +201,32 @@ const azureDevOps: Provider = {
       (r) => r.url && RELATION_LABELS[r.rel],
     );
 
+    // Extract PR IDs from ArtifactLink relations
+    // URL format: vstfs:///Git/PullRequestId/{project}%2F{repo}%2F{prId}
+    const pullRequestIds: number[] = [];
+    for (const rel of rawRelations) {
+      if (
+        rel.rel === "ArtifactLink" &&
+        rel.attributes?.name === "Pull Request" &&
+        rel.url
+      ) {
+        const prMatch = rel.url.match(/%2F(\d+)$/i);
+        if (prMatch) pullRequestIds.push(parseInt(prMatch[1], 10));
+      }
+    }
+
+    // Extract attachment URLs from AttachedFile relations
+    const attachments: WorkItemAttachment[] = [];
+    for (const rel of rawRelations) {
+      if (rel.rel === "AttachedFile" && rel.url) {
+        const name =
+          rel.attributes?.name ||
+          rel.url.split("/").pop() ||
+          "attachment";
+        attachments.push({ name, url: rel.url });
+      }
+    }
+
     const relations: WorkItemRelation[] = [];
 
     if (workItemRelations.length > 0) {
@@ -320,6 +347,9 @@ const azureDevOps: Provider = {
       url: `${org}/${project}/_workitems/edit/${workItemId}`,
       fields, // pass all raw fields for tool-level rendering
       relations,
+      pullRequestIds:
+        pullRequestIds.length > 0 ? pullRequestIds : undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
   },
 
@@ -732,6 +762,39 @@ const azureDevOps: Provider = {
     }
 
     return threads;
+  },
+
+  // ── Work Item Comment ──────────────────────────────────────────────────
+
+  async addWorkItemComment(workItemId, text, _config, root, $) {
+    const { org, project } = await azureDevOps.resolveRepo(root, $);
+
+    // az devops invoke requires the body in a file
+    const { tmpdir } = await import("node:os");
+    const { writeFileSync, unlinkSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const tmpFile = join(tmpdir(), `wi-comment-${Date.now()}.json`);
+
+    writeFileSync(tmpFile, JSON.stringify({ text }));
+    try {
+      const result =
+        await $`az devops invoke --area wit --resource comments --route-parameters project=${project} workItemId=${workItemId} --org ${org} --api-version 7.1-preview --http-method POST --in-file ${tmpFile} --output json`
+          .text();
+
+      const parsed = JSON.parse(result);
+      return {
+        commentId: parsed.id ?? parsed.commentId ?? 0,
+        url:
+          parsed.url ??
+          `${org}/${project}/_apis/wit/workItems/${workItemId}/comments/${parsed.id}`,
+      };
+    } finally {
+      try {
+        unlinkSync(tmpFile);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
   },
 };
 

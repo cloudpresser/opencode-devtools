@@ -3,7 +3,7 @@ import type { DevToolsConfig } from "../config";
 import { getProvider } from "../providers";
 import type { PrCommentThread } from "../providers/types";
 
-function formatThread(thread: PrCommentThread, index: number): string {
+export function formatThread(thread: PrCommentThread, index: number): string {
   const lines: string[] = [];
 
   const statusIcon: Record<string, string> = {
@@ -35,6 +35,27 @@ function formatThread(thread: PrCommentThread, index: number): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Format an array of PR comment threads into a readable markdown string.
+ * Composable — can be used outside the tool layer (e.g., command hooks).
+ */
+export function formatPrComments(
+  threads: PrCommentThread[],
+  prNumber: string | number,
+): string {
+  if (threads.length === 0) return "No comment threads found.";
+
+  const active = threads.filter((t) => t.status === "active").length;
+  const resolved = threads.filter(
+    (t) => t.status === "fixed" || t.status === "closed",
+  ).length;
+
+  const header = `## PR #${prNumber} Comments\n\n**${threads.length}** threads (${active} active, ${resolved} resolved)\n\n---`;
+  const body = threads.map(formatThread).join("\n\n---\n\n");
+
+  return `${header}\n\n${body}`;
 }
 
 export function createPrCommentsTool(

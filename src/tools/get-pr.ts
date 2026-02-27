@@ -113,7 +113,7 @@ const formatPolicyLine = (p: PrPolicy): string => {
   return `${icon.padEnd(10)} ${name.padEnd(45)} ${buildRef}  ${duration}`.trimEnd();
 };
 
-const formatPrOutput = (
+export const formatPrOutput = (
   pr: PrResult,
   cfg: DevToolsConfig["getPr"],
 ): string => {

@@ -19,6 +19,13 @@ const stripHtml = (html: string | undefined | null): string => {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/?(p|div|li|ul|ol|h[1-6])[^>]*>/gi, "\n")
+    // Preserve <img> tags as markdown image links before the catch-all
+    // removal. This keeps URLs discoverable by extractMediaUrls() and
+    // visible to models that support inline image references.
+    .replace(
+      /<img[^>]+src="([^"]+)"[^>]*>/gi,
+      (_, src) => `[Image](${src})`,
+    )
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -153,6 +160,7 @@ export function formatWorkItemResult(
       ["Microsoft.VSTS.TCM.TestingDetails", "Testing Details", "html"],
       ["Custom.TestingDetails", "Testing Details", "html"],
       ["Microsoft.VSTS.TCM.ReproSteps", "Repro Steps", "html"],
+      ["Microsoft.VSTS.TCM.Steps", "Test Steps", "html"],
     ];
 
     for (const [key, heading, format] of extraSections) {
@@ -207,6 +215,7 @@ export function formatWorkItemResult(
       "Microsoft.VSTS.TCM.TestingDetails",
       "Custom.TestingDetails",
       "Microsoft.VSTS.TCM.ReproSteps",
+      "Microsoft.VSTS.TCM.Steps",
       "VectorVest.Common.RequirementLinks",
       "milestone",
       "labels",
@@ -224,6 +233,25 @@ export function formatWorkItemResult(
           `**${label}:** ${typeof val === "string" && val.includes("<") ? stripHtml(val) : val}`,
         );
       }
+    }
+  }
+
+  // Attachments
+  if (result.attachments && result.attachments.length > 0) {
+    lines.push("");
+    lines.push("## Attachments");
+    for (const att of result.attachments) {
+      lines.push(`- [${att.name}](${att.url})`);
+    }
+  }
+
+  // Linked Pull Requests (only rendered when PRs exist — when work
+  // hasn't reached the PR stage yet, this section is omitted entirely)
+  if (result.pullRequestIds && result.pullRequestIds.length > 0) {
+    lines.push("");
+    lines.push("## Linked Pull Requests");
+    for (const prId of result.pullRequestIds) {
+      lines.push(`- PR #${prId}`);
     }
   }
 

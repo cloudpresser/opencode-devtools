@@ -6,6 +6,13 @@ export interface RepoInfo {
   project: string;
 }
 
+export interface WorkItemAttachment {
+  /** Display name of the attachment */
+  name: string;
+  /** Azure DevOps API URL to download the attachment */
+  url: string;
+}
+
 export interface WorkItemResult {
   id: number;
   title: string;
@@ -17,6 +24,10 @@ export interface WorkItemResult {
   /** Raw provider-specific fields (Azure DevOps System.* fields, GitHub issue JSON, etc.) */
   fields: Record<string, any>;
   relations: WorkItemRelation[];
+  /** PR IDs extracted from ArtifactLink relations (vstfs:///Git/PullRequestId/...) */
+  pullRequestIds?: number[];
+  /** Attached file URLs extracted from AttachedFile relations */
+  attachments?: WorkItemAttachment[];
 }
 
 export interface WorkItemRelation {
@@ -105,6 +116,20 @@ export interface PrCommentThread {
   comments: PrComment[];
 }
 
+// ─── Media Processing Config ─────────────────────────────────────────────────
+
+export interface MediaConfig {
+  /** Enable media processing — download and describe images/videos with a
+   *  vision model. Applies to all workflows. (default: true) */
+  enabled?: boolean;
+  /** Max file size in bytes before skipping download (default: 50 MB) */
+  maxFileSize?: number;
+  /** Vision model ID (default: "gemini-3.1-pro-preview") */
+  model?: string;
+  /** Vision model provider (default: "google") */
+  provider?: string;
+}
+
 // ─── Provider Interface ──────────────────────────────────────────────────────
 
 export interface Provider {
@@ -151,4 +176,12 @@ export interface Provider {
     root: string,
     $: any,
   ): Promise<PrCommentThread[]>;
+
+  addWorkItemComment?(
+    workItemId: number | string,
+    text: string,
+    config: any,
+    root: string,
+    $: any,
+  ): Promise<{ commentId: number; url: string }>;
 }

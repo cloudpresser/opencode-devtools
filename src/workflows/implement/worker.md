@@ -6,132 +6,69 @@ You are executing a dev task following the Superior Workflow.
 
 {{MEDIA_CONTEXT}}
 
+## Test Infrastructure Reference
+
+{{TESTING_GUIDANCE}}
+
 ## Your Mission
 
-Execute this dev task end-to-end: red/green testing, commit, PR queue.
+Execute this dev task end-to-end: red/green testing, commit, queue.
 
-### Test Infrastructure Bootstrapping
+### Phase 2: Red Commit (failing test)
 
-If the target package has no test setup (no `jest.config.ts`, no `"jest"`
-section in `package.json`, no `"test"` script):
-
-1. Create `jest.config.ts`:
-   ```ts
-   const config = {
-     clearMocks: true,
-     testPathIgnorePatterns: ['/node_modules/', '/dist/'],
-   };
-   export default config;
-   ```
-2. Create `babel.config.js`:
-   ```js
-   module.exports = {
-     sourceType: 'unambiguous',
-     presets: [
-       ['@babel/preset-env', { targets: { chrome: 100 } }],
-       '@babel/preset-typescript',
-     ],
-     plugins: ['@babel/plugin-proposal-export-namespace-from'],
-   };
-   ```
-3. Add to `package.json`:
-   - Script: `"test": "jest"`
-   - devDependencies: `"@jest/globals": "^29.3.1"`,
-     `"@vectorvest/testing-utils": "*"`
-4. Include these infrastructure files in the red commit.
-
-## Phase 2: Red Commit (failing test)
-
-This step is MANDATORY. Every PR must demonstrate the fix via
+This step is MANDATORY. Every PR must demonstrate the change via
 test history.
 
-1. Write a test that DEMONSTRATES the bug or missing behavior:
-   - **Maestro** (`.yaml`) for E2E / UI behavior
-   - **Jest** for unit tests
-   - When writing Jest tests, ALWAYS import from `@jest/globals`:
+1. Check if the target package has test infrastructure:
+   - Look for a `"test"` script and `"jest"` config in its `package.json`
+   - If missing, see **Test Infrastructure Reference** above to set it up
+     using the `generate` tool with the `add-tests` template
+2. Write a test that DEMONSTRATES the bug or missing behavior:
+   - **Jest** for unit / snapshot / className tests
+   - **Maestro** (`.yaml`) for E2E / UI interaction behavior
+   - ALWAYS import from `@jest/globals`:
      `import { describe, expect, it, jest, beforeEach } from '@jest/globals';`
-2. Verify the test fails by running the specific test file
-   (not the whole suite)
-3. Commit using the `commit` tool with `skipHooks: true`:
+3. Verify the test fails — check the automatic `--- TESTS ---`
+   output after writing the test file. If it shows PASSING, your
+   test doesn't demonstrate the missing behavior; revise it.
+4. Commit using the `commit` tool with `skipHooks: true`:
    - The red commit intentionally has a failing test, so pre-commit
      hooks must be skipped
    - `message`: `test(<scope>): add failing test for <description>`
    - `workdir`: `.`
-4. Do NOT analyze why the test fails — the failure IS the point.
+5. Do NOT analyze why the test fails — the failure IS the point.
    Commit immediately after confirming it fails.
 
-## Phase 3: Green Commit (implement fix)
+### Phase 3: Green Commit (implement the change)
 
-1. Implement the fix per the task description's Approach section
-2. Run the SAME test from Phase 2 — it should now PASS
-3. Run `yarn check-types` and `yarn lint` — fix any issues
-4. Commit using the `commit` tool (without `skipHooks`):
-   - Pre-commit hooks will run and must pass
-   - `message`: `fix(<scope>): <description>`
+1. Implement the change per the task description's Approach section
+2. After each file write, type-check and test results appear
+   automatically in the tool output (look for `--- TYPE CHECK ---`
+   and `--- TESTS ---` sections). Review them and fix any errors
+   before proceeding. Do NOT manually run check-types, lint, or
+   tests — the afterWrite hooks handle this automatically.
+3. Once all automatic checks pass, commit using the `commit` tool
+   (without `skipHooks`):
+   - `message`: `<type>(<scope>): <description>`
    - `workdir`: `.`
-5. Do NOT modify the red test unless absolutely necessary for the fix.
+   - Use the appropriate conventional commit type based on the work
+     item: `feat` for features/tasks, `fix` for bugs, `refactor`
+     for refactoring, etc.
+4. Do NOT modify the red test unless absolutely necessary for the fix.
    If you must, explain why in the commit message.
 
-## Phase 4: Queue for Trickle-Push with Scheduled PR
+### Phase 4: Session Complete
 
-After all commits are made, queue the branch for trickle-push AND
-scheduled PR creation using the `push-queue-schedule` tool:
-
-- `branch`: the current branch name
-- `estimatedHours`: {{REMAINING_WORK}} (already converted to hours). If "unknown", **omit this parameter entirely** — the tool will use default uniform spacing.
-- `prConfig`:
-  - `userPrompt`: concise description of the changes
-  - `targetBranch`: "staging"
-  - `workItems`: array of work item IDs to link (the task ID)
-  - `workItemId`: the task's work item ID (for board card movement)
-
-If `{{REMAINING_WORK}}` is "unknown", **omit the `estimatedHours`
-parameter entirely**. The tool will fall back to default uniform spacing
-(25–45 min between commits).
-
-The tool will:
-
-1. Rewrite commit dates proportionally across the estimated duration
-2. Save a PR config file
-3. Install a cron job to trickle-push commits during business hours
-4. After the final commit is pushed, the cron job automatically:
-   - Creates the PR via @cloudpresser/create-pr
-   - Moves the task card to Ready for Review (Active)
-   - (Future) Notifies the Teams channel
-
-**Do NOT create a PR manually** — the push-queue handles this
-after the final push.
-
-**Do NOT push manually** — commits must stay local until their
-scheduled push time.
-
-After PR approval:
-
-- **Dev tasks:** Close the dev task
-- **Defects:** Move to Ready for QA Review
-
-## Phase 5: Session Complete
-
-All phases are done. Post a completion comment on the work item
-using the `work-item-comment` tool:
-
-```
-Automated fix applied. Commits queued for trickle-push.
-PR will be created automatically after final push.
-
-Summary: <brief description of what was changed and why>
-```
+**Do NOT create a PR manually** — the push-queue creates the PR
+automatically after the final push.
+**Do NOT push manually** — the conclusion strategy handles push scheduling.
+**Do NOT post work-item comments** — completion comments are posted
+automatically after push-queue scheduling.
 
 ### If You Cannot Complete the Task
 
-If you cannot find a solution you are confident with, or if you are
-blocked by infrastructure issues (pre-commit hook failures, missing
-dependencies, etc.):
-
-1. Post a comment on the work item using the `work-item-comment` tool
-   explaining your findings and what blocked you
-2. Complete the session — the workflow can be re-run after input
-   is provided on the ticket
+If blocked or unable to find a confident solution, complete the session
+with a summary of your findings and blockers.
 
 ## Rules (mandatory)
 

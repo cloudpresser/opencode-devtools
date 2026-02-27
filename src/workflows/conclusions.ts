@@ -40,7 +40,7 @@ When all work is complete and all tests pass:
 2. Call \`push-queue-schedule\` with:
    - \`branch\`: current branch name
    - \`estimatedHours\`: your estimate of total work hours
-   - \`prConfig\`: \`{ userPrompt: "<summary>", targetBranch: "<base>" }\`
+   - \`prConfig\`: \`{ userPrompt: "<summary>", targetBranch: "{{TARGET_BRANCH}}" }\`
 
 **Do NOT post work-item comments** — completion comments will be posted
 automatically after push-queue scheduling.

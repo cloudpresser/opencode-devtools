@@ -189,10 +189,13 @@ describe("createWorktreeTool", () => {
       const expectedDir = join(repoDir, "..", branch);
       const nmPath = join(expectedDir, "node_modules");
 
-      expect(result).toContain("node_modules symlinked (lockfiles match)");
+      expect(result).toContain(
+        "node_modules shallow-copied (workspace symlinks re-created)",
+      );
       expect(existsSync(nmPath)).toBe(true);
-      expect(lstatSync(nmPath).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(nmPath)).toBe(join(repoDir, "node_modules"));
+      // Shallow copy creates a real directory, not a symlink
+      expect(lstatSync(nmPath).isDirectory()).toBe(true);
+      expect(lstatSync(nmPath).isSymbolicLink()).toBe(false);
 
       // Cleanup
       await shellAt(
@@ -224,9 +227,10 @@ describe("createWorktreeTool", () => {
       const expectedDir = join(repoDir, "..", branch);
       const nmPath = join(expectedDir, "node_modules");
 
-      expect(result).toContain("node_modules symlinked");
+      expect(result).toContain("node_modules shallow-copied");
       expect(existsSync(nmPath)).toBe(true);
-      expect(lstatSync(nmPath).isSymbolicLink()).toBe(true);
+      // Shallow copy creates a real directory, not a symlink
+      expect(lstatSync(nmPath).isDirectory()).toBe(true);
 
       // Cleanup
       await shellAt(
@@ -321,7 +325,7 @@ describe("createWorktreeTool", () => {
 
       expect(result).toContain("Dependencies:");
       expect(result).toContain(
-        "Use this absolute path for all subsequent file operations.",
+        "This session's setup is complete. Implementation continues in the new session.",
       );
 
       // Cleanup

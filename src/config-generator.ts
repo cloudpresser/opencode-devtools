@@ -51,6 +51,16 @@ export const generateConfig = (
   lines.push(`  "provider": "${provider}",`);
   lines.push("");
 
+  // ── Superior Workflow flag ──
+  lines.push(
+    "  // Enable the Superior Workflow. Force-enables commands, push-queue,",
+  );
+  lines.push(
+    "  // create-pr, and work-item tools. Activates session-abort on worktree failure.",
+  );
+  lines.push(`  "superiorWorkflow": false,`);
+  lines.push("");
+
   // ── Tools section ──
   lines.push("  // Enable/disable tools");
   const toolsObj: Record<string, boolean> = {};
