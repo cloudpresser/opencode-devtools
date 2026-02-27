@@ -72,13 +72,6 @@ function shallowCopyNodeModules(sessionDir: string, worktreeDir: string): void {
 
 // ─── Tmux Spawn Primitives ────────────────────────────────────────────────────
 
-export interface SpawnInTmuxResult {
-  /** Human-readable status message. */
-  status: string;
-  /** Pre-generated session ID passed to `opencode run --session`. */
-  sessionId: string;
-}
-
 export interface SpawnInTmuxOptions {
   /** Tmux window name (will be sanitized). */
   windowName: string;
@@ -92,21 +85,18 @@ export interface SpawnInTmuxOptions {
   agentName?: string;
   /** Model ID (omit to use user's default). */
   agentModel?: string;
-  /** Pre-generated session ID. If omitted, one is generated automatically. */
-  sessionId?: string;
   /** Bun shell instance. */
   $: any;
 }
 
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/** Generate an OpenCode-compatible session ID: ses_ + 12 hex + 14 Base62 */
-function generateSessionId(): string {
-  const hex = crypto.randomUUID().replace(/-/g, "").slice(0, 12).toLowerCase();
-  const bytes = crypto.getRandomValues(new Uint8Array(14));
-  let random = "";
-  for (let i = 0; i < 14; i++) random += BASE62[bytes[i] % 62];
-  return `ses_${hex}${random}`;
+/** Generate a short random pane ID like "x7kQ" for easy tmux identification. */
+function randomPaneId(len = 4): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  let id = "";
+  for (let i = 0; i < len; i++) id += BASE62[bytes[i] % 62];
+  return id;
 }
 
 /**
@@ -114,22 +104,13 @@ function generateSessionId(): string {
  * Shared primitive used by both worktree workflows (via createWorktreeDirect)
  * and direct workflows (via CLI).
  */
-export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<SpawnInTmuxResult> {
+export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<string> {
   const { cwd, command, prompt, agentName, agentModel, $ } = opts;
-  const windowName = opts.windowName.replace(/\//g, "-").slice(0, 40);
-
-  // Pre-generate a deterministic session ID so callers know it before the
-  // process starts. Requires OpenCode with custom session ID support
-  // (Session.create accepts an optional `id` field).
-  // Format: ses_ + 12 lowercase hex + 14 Base62 chars
-  const sessionId = opts.sessionId ?? generateSessionId();
-
+  const paneId = randomPaneId();
+  const windowName = `${opts.windowName.replace(/\//g, "-").slice(0, 32)}-${paneId}`;
 
   if (!process.env.TMUX) {
-    return {
-      status: `Not in tmux. Run manually: cd ${cwd} && opencode`,
-      sessionId,
-    };
+    return `Not in tmux. Run manually: cd ${cwd} && opencode`;
   }
 
   try {
@@ -141,7 +122,6 @@ export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<SpawnInTmux
       experimental: { continue_loop_on_deny: true },
     });
     let opencodeCmd = `OPENCODE_CONFIG_CONTENT='${configOverride}' opencode run`;
-    opencodeCmd += ` --session ${sessionId}`;
     if (agentName) opencodeCmd += ` --agent ${agentName}`;
     if (agentModel) opencodeCmd += ` --model ${agentModel}`;
     opencodeCmd += ` --command ${cmd}`;
@@ -162,15 +142,9 @@ export async function spawnInTmux(opts: SpawnInTmuxOptions): Promise<SpawnInTmux
 
     // Keep the tmux pane visible after process exits
     await $`tmux set-option -t ${windowName} remain-on-exit on`.nothrow().quiet();
-    return {
-      status: `New OpenCode session spawned in tmux window '${windowName}' (session: ${sessionId}).`,
-      sessionId,
-    };
+    return `Tmux window '${windowName}' spawned.`;
   } catch (e: any) {
-    return {
-      status: `Failed to spawn tmux window: ${e.message}. Run manually: cd ${cwd} && opencode`,
-      sessionId,
-    };
+    return `Failed to spawn tmux window: ${e.message}. Run manually: cd ${cwd} && opencode`;
   }
 }
 
@@ -183,10 +157,9 @@ interface SpawnTmuxOptions {
   workerCommand?: string;
   agentName?: string;
   agentModel?: string;
-  sessionId?: string;
 }
 
-async function spawnTmuxSession(opts: SpawnTmuxOptions): Promise<SpawnInTmuxResult> {
+async function spawnTmuxSession(opts: SpawnTmuxOptions): Promise<string> {
   return spawnInTmux({
     windowName: opts.branchName,
     cwd: opts.worktreeDir,
@@ -194,7 +167,6 @@ async function spawnTmuxSession(opts: SpawnTmuxOptions): Promise<SpawnInTmuxResu
     prompt: opts.prompt,
     agentName: opts.agentName || "implement",
     agentModel: opts.agentModel || "opencode/claude-opus-4-6",
-    sessionId: opts.sessionId,
     $: opts.$,
   });
 }
@@ -311,7 +283,7 @@ export async function createWorktreeDirect(
           });
           return {
             success: true,
-            message: `Branch '${branchName}' already has a worktree at ${existingWorktreePath}. Reusing it.\n${tmuxResult.status}\nWorker session ID: ${tmuxResult.sessionId}`,
+            message: `Branch '${branchName}' already has a worktree at ${existingWorktreePath}. Reusing it.\n${tmuxResult}`,
             worktreeDir: existingWorktreePath,
           };
         }
@@ -488,7 +460,7 @@ export async function createWorktreeDirect(
     agentName: opts.workerAgentName,
     agentModel: opts.workerAgentModel,
   });
-  _log.info("worktree", `tmux: ${tmuxResult.status}`);
+  _log.info("worktree", `tmux: ${tmuxResult}`);
 
   return {
     success: true,
@@ -496,8 +468,7 @@ export async function createWorktreeDirect(
       `Worktree created at: ${worktreeDir}`,
       `Branch: ${branchName} (from ${baseBranch})`,
       `Dependencies: ${depsStatus}`,
-      tmuxResult.status,
-      `Worker session ID: ${tmuxResult.sessionId}`,
+      tmuxResult,
       "",
       "This session's setup is complete. Implementation continues in the new session.",
     ].join("\n"),

@@ -178,7 +178,7 @@ async function runWorkflow(workflow: WorkflowDefinition, args: string[]) {
       agentModel: workflow.agent?.model,
       $,
     });
-    console.log(result.status);
+    console.log(result);
   }
 }
 
