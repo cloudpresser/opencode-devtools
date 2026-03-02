@@ -22,6 +22,7 @@ export function createGenerateTool(
       name: tool.schema.string(),
       parent: tool.schema.optional(tool.schema.string()),
       isStreaming: tool.schema.optional(tool.schema.boolean()),
+      testType: tool.schema.optional(tool.schema.string()),
     },
     async execute(args) {
       const cmdArgs = [
@@ -34,6 +35,7 @@ export function createGenerateTool(
       if (args.parent) cmdArgs.push("--parent", args.parent);
       if (args.isStreaming !== undefined)
         cmdArgs.push("--isStreaming", String(args.isStreaming));
+      if (args.testType) cmdArgs.push("--testType", args.testType);
 
       try {
         const result =
