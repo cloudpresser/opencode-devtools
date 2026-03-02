@@ -108,8 +108,6 @@ function createMockUtils(
       worktreeDir: "/test/worktree",
     })),
 
-    abortSession: mock(async () => {}),
-
     generateUserMessage: mock(
       (
         workflowName: string,
@@ -153,16 +151,6 @@ export function testWorkflowLifecycle(options: TestWorkflowOptions): void {
       expect(defs[workflow.name].description).toBeTruthy();
     });
 
-    if (
-      workflow.usesWorktree !== false &&
-      workflow.agent
-    ) {
-      test("registers the workflow-run command for worker dispatch", () => {
-        const defs = registry.getCommandDefinitions();
-        expect(defs["workflow-run"]).toBeDefined();
-      });
-    }
-
     // ── Template Existence ──
 
     test("worker template file exists", () => {
@@ -170,17 +158,6 @@ export function testWorkflowLifecycle(options: TestWorkflowOptions): void {
       const path = join(workflow.__dirname, workflow.workerTemplate);
       expect(existsSync(path)).toBe(true);
     });
-
-    if (workflow.launcherTemplate) {
-      test("launcher template file exists", () => {
-        if (!workflow.__dirname) return;
-        const path = join(
-          workflow.__dirname,
-          workflow.launcherTemplate!,
-        );
-        expect(existsSync(path)).toBe(true);
-      });
-    }
 
     // ── Agent Registration ──
 
@@ -227,71 +204,36 @@ export function testWorkflowLifecycle(options: TestWorkflowOptions): void {
       expect(required.has("commands")).toBe(true);
     });
 
-    // ── Worker Context Injection (via workflow-run) ──
+    // ── Command Injection ──
 
-    if (workflow.usesWorktree !== false) {
-      test("worker dispatch injects context with no unreplaced placeholders", async () => {
-        const output = { parts: [{ type: "text", text: "original" }] };
-        await hooks["command.execute.before"](
-          {
-            command: "workflow-run",
-            sessionID: "test-session",
-            arguments: `${workflow.name} 12345`,
-          },
-          output,
-        );
+    test("command injects context with no unreplaced placeholders", async () => {
+      const output = { parts: [{ type: "text", text: "original" }] };
+      await hooks["command.execute.before"](
+        {
+          command: workflow.name,
+          sessionID: "test-session",
+          arguments: workflow.usesWorktree !== false ? "12345" : "test-args",
+        },
+        output,
+      );
 
-        // 3 parts: user message + template + worker metadata
-        expect(output.parts.length).toBe(3);
-        expect(output.parts[0].text).toBeTruthy();
-        // Check no unreplaced placeholders in template
+      // Worktree workflows: 3 parts (user message + template + worker metadata)
+      // Direct workflows: 2 parts (user message + template)
+      const expectedParts = workflow.usesWorktree !== false ? 3 : 2;
+      expect(output.parts.length).toBe(expectedParts);
+      expect(output.parts[0].text).toBeTruthy();
+      // Check no unreplaced placeholders in template
+      // (skip for meta-workflows like create-workflow that intentionally output template syntax)
+      if (!workflow.name.includes("create-workflow")) {
         const context = output.parts[1].text;
         const unreplaced = context.match(/\{\{[A-Z_]+\}\}/g) || [];
         expect(unreplaced).toEqual([]);
-        // Verify worker metadata block
+      }
+      // Worktree workflows should have worker metadata
+      if (workflow.usesWorktree !== false) {
         expect(output.parts[2].text).toContain("<!-- worker-metadata:");
-      });
-    }
-
-    // ── Direct Workflow Injection ──
-
-    if (workflow.usesWorktree === false) {
-      test("direct command injects context", async () => {
-        const output = { parts: [{ type: "text", text: "original" }] };
-        await hooks["command.execute.before"](
-          {
-            command: workflow.name,
-            sessionID: "test-session",
-            arguments: "test-args",
-          },
-          output,
-        );
-
-        expect(output.parts.length).toBe(2);
-        expect(output.parts[0].text).toBeTruthy();
-      });
-    }
-
-    // ── Launcher (Worktree Workflows) ──
-
-    if (workflow.usesWorktree !== false && workflow.resolve) {
-      test("deterministic launch creates worktree and aborts session", async () => {
-        // This test requires the resolve function to return a result
-        // with specific args. We test that the framework handles it.
-        const output = { parts: [{ type: "text", text: "original" }] };
-        await hooks["command.execute.before"](
-          {
-            command: workflow.name,
-            sessionID: "test-session",
-            arguments: "12345 staging",
-          },
-          output,
-        );
-
-        // Verify output was modified (either launcher or agent path)
-        expect(output.parts.length).toBeGreaterThanOrEqual(1);
-      });
-    }
+      }
+    });
 
     // ── Non-Interference ──
 

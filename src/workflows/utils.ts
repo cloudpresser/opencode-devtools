@@ -175,7 +175,7 @@ export function createWorkflowUtils(
         branchName: opts.branchName,
         baseBranch: opts.baseBranch,
         prompt: `${opts.workflowName} ${opts.workerArgs}`,
-        workerCommand: "/workflow-run",
+        workerCommand: `/${opts.workflowName}`,
         workerAgentName: opts.agentName,
         workerAgentModel: opts.agentModel,
         reuseExisting: opts.reuseExisting,
@@ -184,20 +184,6 @@ export function createWorkflowUtils(
         $,
         log,
       });
-    },
-
-    // ── Abort Session ──
-    async abortSession(sessionID: string) {
-      if (client?.session?.abort) {
-        client.session
-          .abort({ path: { id: sessionID } })
-          .catch((e: any) => {
-            log.error(
-              "workflow",
-              `abort failed for session=${sessionID}: ${e?.message ?? e}`,
-            );
-          });
-      }
     },
 
     // ── User Message Generation ──

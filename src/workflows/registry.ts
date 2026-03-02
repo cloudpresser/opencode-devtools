@@ -80,7 +80,7 @@ export class WorkflowRegistry {
 
   /**
    * Merged command definitions for OpenCode config injection.
-   * Each workflow gets its own named command + a shared "workflow-run" command.
+   * Each workflow gets its own named slash command.
    */
   getCommandDefinitions(): Record<
     string,
@@ -93,14 +93,6 @@ export class WorkflowRegistry {
       commands[wf.name] = {
         template: `${wf.description}: $ARGUMENTS`,
         description: wf.description,
-      };
-    }
-
-    // Generic worker dispatch command (used by framework internally)
-    if (this.workflows.size > 0) {
-      commands["workflow-run"] = {
-        template: "Worker context injection: $ARGUMENTS",
-        description: "Internal: workflow worker context injection",
       };
     }
 
@@ -132,17 +124,6 @@ export class WorkflowRegistry {
   ): WorkflowDefinition | undefined {
     const workflowName = this.commandToWorkflow.get(commandName);
     return workflowName ? this.workflows.get(workflowName) : undefined;
-  }
-
-  /** Resolve the "workflow-run" dispatch: parse "<workflowName> <args>" */
-  resolveWorkerDispatch(
-    args: string,
-  ): { workflow: WorkflowDefinition; workerArgs: string } | undefined {
-    const spaceIdx = args.indexOf(" ");
-    const workflowName = spaceIdx > 0 ? args.slice(0, spaceIdx) : args;
-    const workerArgs = spaceIdx > 0 ? args.slice(spaceIdx + 1).trim() : "";
-    const workflow = this.workflows.get(workflowName);
-    return workflow ? { workflow, workerArgs } : undefined;
   }
 
   /** Collect all injectAfterWrite handlers from all workflows. */

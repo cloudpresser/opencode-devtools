@@ -2,8 +2,8 @@
  * Workflow Engine — Compiles a WorkflowRegistry into OpenCode Hooks.
  *
  * This is the bridge between workflow definitions and the plugin API.
- * It handles command dispatch, launcher lifecycle, worker context injection,
- * session tracking, injectAfterWrite, and lifecycle hook delegation.
+ * It handles command dispatch, worker context injection, session tracking,
+ * injectAfterWrite, and lifecycle hook delegation.
  */
 
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import type {
   WorkflowLogger,
   AfterWriteContext,
 } from "./types";
-import { parseWorkItemId } from "./types";
+import { DEFAULT_PARAMS, parseParams } from "./types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -147,44 +147,17 @@ export function buildWorkflowHooks(
         `command=${commandName} session=${sessionID} args=${rawArgs}`,
       );
 
-      // 1. Handle generic worker dispatch: /workflow-run <workflowName> <args>
-      if (commandName === "workflow-run") {
-        await handleWorkerDispatch(
-          registry,
-          utils,
-          log,
-          rawArgs,
-          sessionID,
-          output,
-        );
-        return;
-      }
-
-      // 2. Handle workflow launcher/direct commands: /<workflowName> <args>
       const workflow = registry.resolveCommand(commandName);
       if (!workflow) return; // not our command, pass through
 
-      if (workflow.usesWorktree === false) {
-        // Direct workflow (no worktree) — inject context into current session
-        await handleDirectWorkflow(
-          workflow,
-          utils,
-          log,
-          rawArgs,
-          sessionID,
-          output,
-        );
-      } else {
-        // Worktree workflow — run launcher lifecycle
-        await handleLauncher(
-          workflow,
-          utils,
-          log,
-          rawArgs,
-          sessionID,
-          output,
-        );
-      }
+      await handleWorkflowCommand(
+        workflow,
+        utils,
+        log,
+        rawArgs,
+        sessionID,
+        output,
+      );
     },
 
     // ── Session Tracking ──
@@ -284,37 +257,39 @@ export function buildWorkflowHooks(
 // ─── Internal Handlers ────────────────────────────────────────────────────────
 
 /**
- * Handle /workflow-run dispatch — generic worker context injection.
- * Parses "<workflowName> <args>" and calls the workflow's injectWorkerContext.
+ * Unified command handler for all workflows.
+ *
+ * Worktree workflows (implement, fix-defect) arrive here when spawned by the
+ * CLI via `opencode run --command <workflow> '<args>'`. Direct workflows
+ * (plan, merge-rebase) arrive via interactive slash commands.
+ *
+ * Both paths: load template → inject context → set output parts.
+ * Worktree workflows additionally inject worker metadata for session analysis.
  */
-async function handleWorkerDispatch(
-  registry: WorkflowRegistry,
+async function handleWorkflowCommand(
+  workflow: WorkflowDefinition,
   utils: WorkflowUtils,
   log: WorkflowLogger,
   rawArgs: string,
   sessionID: string,
   output: any,
 ): Promise<void> {
-  const dispatch = registry.resolveWorkerDispatch(rawArgs);
-  if (!dispatch) {
-    log.warn("engine:worker", `no workflow found for dispatch args: ${rawArgs}`);
-    return;
-  }
+  // ── Parse params from raw args ──
+  // Note: No validation here — the CLI validates required params before launch.
+  // Worker sessions may only receive a subset of params (e.g., workerArgs
+  // doesn't include baseBranch, which was consumed during worktree creation).
+  const paramDefs = workflow.params ?? DEFAULT_PARAMS;
+  const params = parseParams(rawArgs, paramDefs);
 
-  const { workflow, workerArgs } = dispatch;
-  log.info(
-    "engine:worker",
-    `dispatching to workflow=${workflow.name} args=${workerArgs}`,
-  );
-
+  // ── Load template ──
   const templatePath = resolveTemplatePath(workflow, workflow.workerTemplate);
   let template: string;
   try {
     template = utils.loadTemplate(templatePath);
   } catch (e: any) {
     log.error(
-      "engine:worker",
-      `failed to load worker template: ${e.message}`,
+      "engine:command",
+      `failed to load template for ${workflow.name}: ${e.message}`,
     );
     return;
   }
@@ -324,12 +299,10 @@ async function handleWorkerDispatch(
     template += "\n" + workflow.conclusion.templateFragment;
   }
 
-  const workItemId = parseWorkItemId(workerArgs);
-
+  // ── Inject context ──
   try {
     const result = await workflow.injectWorkerContext({
-      args: workerArgs,
-      workItemId,
+      params,
       template,
       sessionID,
       utils,
@@ -340,28 +313,29 @@ async function handleWorkerDispatch(
       result.templateVars,
     );
 
-    // Structured metadata for session bridging.
-    // Allows meta-workflows to identify which workflow this worker belongs to.
-    const workerMetadata = {
-      type: "workflow-worker",
-      workflowName: workflow.name,
-      workerSessionId: sessionID,
-      workerArgs,
-      startedAt: new Date().toISOString(),
-    };
-
     output.parts.length = 0;
     output.parts.push(
       { type: "text", text: result.userMessage },
       { type: "text", text: finalTemplate },
-      {
+    );
+
+    // Worktree workflows: inject metadata for session analysis
+    if (workflow.usesWorktree !== false) {
+      const workerMetadata = {
+        type: "workflow-worker",
+        workflowName: workflow.name,
+        sessionId: sessionID,
+        params,
+        startedAt: new Date().toISOString(),
+      };
+      output.parts.push({
         type: "text",
         text: `<!-- worker-metadata: ${JSON.stringify(workerMetadata)} -->`,
-      },
-    );
+      });
+    }
   } catch (e: any) {
     log.error(
-      "engine:worker",
+      "engine:command",
       `injectWorkerContext failed for ${workflow.name}: ${e.message}`,
     );
     // Still inject the raw template so the agent has instructions
@@ -371,232 +345,6 @@ async function handleWorkerDispatch(
       { type: "text", text: template },
     );
   }
-}
-
-/**
- * Handle direct (non-worktree) workflow — inject context into current session.
- */
-async function handleDirectWorkflow(
-  workflow: WorkflowDefinition,
-  utils: WorkflowUtils,
-  log: WorkflowLogger,
-  rawArgs: string,
-  sessionID: string,
-  output: any,
-): Promise<void> {
-  const templatePath = resolveTemplatePath(workflow, workflow.workerTemplate);
-  let template: string;
-  try {
-    template = utils.loadTemplate(templatePath);
-  } catch (e: any) {
-    log.error(
-      "engine:direct",
-      `failed to load template for ${workflow.name}: ${e.message}`,
-    );
-    return;
-  }
-
-  // Append conclusion strategy fragment
-  if (workflow.conclusion.templateFragment) {
-    template += "\n" + workflow.conclusion.templateFragment;
-  }
-
-  const firstArg = rawArgs.split(/\s+/)[0] || "";
-  const workItemId = parseWorkItemId(firstArg);
-
-  try {
-    const result = await workflow.injectWorkerContext({
-      args: rawArgs,
-      workItemId,
-      template,
-      sessionID,
-      utils,
-    });
-
-    const finalTemplate = utils.substitutePlaceholders(
-      template,
-      result.templateVars,
-    );
-
-    output.parts.length = 0;
-    output.parts.push(
-      { type: "text", text: result.userMessage },
-      { type: "text", text: finalTemplate },
-    );
-  } catch (e: any) {
-    log.error(
-      "engine:direct",
-      `injectWorkerContext failed for ${workflow.name}: ${e.message}`,
-    );
-  }
-}
-
-/**
- * Handle worktree launcher lifecycle:
- * 1. Call workflow.resolve() for deterministic launch
- * 2. On success: create worktree → run side effects → abort session
- * 3. On undefined: inject launcher template (agent fallback)
- * 4. On error: inject launcher template with error
- */
-async function handleLauncher(
-  workflow: WorkflowDefinition,
-  utils: WorkflowUtils,
-  log: WorkflowLogger,
-  rawArgs: string,
-  sessionID: string,
-  output: any,
-): Promise<void> {
-  // Parse work item ID from first arg token (not the whole args string)
-  const firstArg = rawArgs.split(/\s+/)[0] || "";
-  const workItemId = parseWorkItemId(firstArg);
-
-  // If no resolve function, always go to agent fallback
-  if (!workflow.resolve) {
-    await injectLauncherTemplate(workflow, utils, rawArgs, output);
-    return;
-  }
-
-  let resolveResult;
-  try {
-    resolveResult = await workflow.resolve({
-      args: rawArgs,
-      workItemId,
-      utils,
-    });
-  } catch (e: any) {
-    log.error(
-      "engine:launcher",
-      `resolve failed for ${workflow.name}: ${e.message}`,
-    );
-    await injectLauncherTemplate(workflow, utils, rawArgs, output, e.message);
-    return;
-  }
-
-  // Agent fallback — resolve returned undefined
-  if (!resolveResult) {
-    await injectLauncherTemplate(workflow, utils, rawArgs, output);
-    return;
-  }
-
-  // Deterministic launch
-  log.info(
-    "engine:launcher",
-    `deterministic launch: workflow=${workflow.name} branch=${resolveResult.branchName} base=${resolveResult.baseBranch}`,
-  );
-
-  const launchResult = await utils.launchWorker({
-    branchName: resolveResult.branchName,
-    baseBranch: resolveResult.baseBranch,
-    workerArgs: resolveResult.workerArgs,
-    workflowName: workflow.name,
-    agentName: workflow.agent?.name,
-    agentModel: workflow.agent?.model,
-    reuseExisting: resolveResult.reuseExisting,
-  });
-
-  if (launchResult.success) {
-    // Run side effects (e.g., update work item state)
-    if (resolveResult.sideEffects) {
-      try {
-        await resolveResult.sideEffects();
-      } catch (e: any) {
-        log.warn(
-          "engine:launcher",
-          `side effects failed (non-fatal): ${e.message}`,
-        );
-      }
-    }
-
-    // Structured metadata for launcher→worker session bridging.
-    // Parseable by meta-workflows to chain launcher sessions to worker sessions.
-    const launchMetadata = {
-      type: "workflow-launch",
-      workflowName: workflow.name,
-      branchName: resolveResult.branchName,
-      baseBranch: resolveResult.baseBranch,
-      workerArgs: resolveResult.workerArgs,
-      worktreeDir: launchResult.worktreeDir,
-      workItemId: workItemId || null,
-      agentName: workflow.agent?.name || null,
-      launchedAt: new Date().toISOString(),
-    };
-
-    output.parts.length = 0;
-    output.parts.push(
-      {
-        type: "text",
-        text: `Worker launched for ${workflow.name}. ${launchResult.message}`,
-      },
-      {
-        type: "text",
-        text:
-          "The worker session has been spawned. This session's job is done.\n" +
-          "**Do NOT continue working.** The worker will handle implementation.",
-      },
-      {
-        type: "text",
-        text: `<!-- workflow-metadata: ${JSON.stringify(launchMetadata)} -->`,
-      },
-    );
-
-    // Abort the launcher session
-    await utils.abortSession(sessionID);
-  } else {
-    log.error(
-      "engine:launcher",
-      `worktree creation failed: ${launchResult.message}`,
-    );
-    // Fall back to launcher template with error
-    await injectLauncherTemplate(
-      workflow,
-      utils,
-      rawArgs,
-      output,
-      launchResult.message,
-    );
-  }
-}
-
-/**
- * Inject the launcher (fallback) template into output.
- * Used when resolve() returns undefined or throws.
- */
-async function injectLauncherTemplate(
-  workflow: WorkflowDefinition,
-  utils: WorkflowUtils,
-  rawArgs: string,
-  output: any,
-  error?: string,
-): Promise<void> {
-  const templateName = workflow.launcherTemplate || workflow.workerTemplate;
-  const templatePath = resolveTemplatePath(workflow, templateName);
-
-  let template: string;
-  try {
-    template = utils.loadTemplate(templatePath);
-  } catch {
-    // No template at all — just set a minimal message
-    output.parts.length = 0;
-    output.parts.push({
-      type: "text",
-      text: `Run the ${workflow.name} workflow with: ${rawArgs}`,
-    });
-    return;
-  }
-
-  const vars: Record<string, string> = {};
-  if (error) vars.ERROR = error;
-
-  const workItemId = parseWorkItemId(rawArgs);
-  if (workItemId) vars.WORK_ITEM_ID = workItemId;
-
-  const finalTemplate = utils.substitutePlaceholders(template, vars);
-
-  output.parts.length = 0;
-  output.parts.push(
-    { type: "text", text: `${workflow.description}: ${rawArgs}` },
-    { type: "text", text: finalTemplate },
-  );
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

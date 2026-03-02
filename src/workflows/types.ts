@@ -60,9 +60,6 @@ export interface WorkflowUtils {
   /** Create a worktree and spawn a tmux worker session. */
   launchWorker(opts: WorkerLaunchOpts): Promise<WorkerLaunchResult>;
 
-  /** Abort the current session (fire-and-forget). */
-  abortSession(sessionID: string): Promise<void>;
-
   /** Generate a natural-language user message for the command. */
   generateUserMessage(
     workflowName: string,
@@ -132,29 +129,27 @@ export interface WorkflowDefinition {
   workerTemplate: string;
 
   /**
-   * Launcher template for agent-mode fallback (relative to workflow dir).
-   * Loaded when `resolve()` returns undefined or throws.
+   * Declared positional parameters for this workflow.
+   * Used by the CLI for help text generation and argument parsing,
+   * and by the engine for parameter validation before dispatch.
+   *
+   * If not specified, defaults to a single optional `prompt` param.
    */
-  launcherTemplate?: string;
+  params?: WorkflowParam[];
 
   /**
-   * Whether this workflow uses the worktree+worker pattern.
-   * - `true` (default): Framework registers a launcher command that creates
-   *   a worktree and spawns a worker agent in tmux.
-   * - `false`: Framework registers a direct command that injects context
-   *   into the current session (no worktree, no worker agent).
+   * Whether this workflow uses the worktree pattern.
+   * - `true` (default): Launched via CLI, creates a worktree and spawns
+   *   an agent session in tmux. The slash command bootstraps the worker.
+   * - `false`: Runs in the current session (no worktree, no separate agent).
    */
   usesWorktree?: boolean;
 
   /**
-   * Pre-launch context resolution. Called by the framework launcher
-   * before creating a worktree.
+   * Pre-launch context resolution. Called by the CLI/engine before dispatch.
    *
-   * Return `ResolveResult` for deterministic launch (zero LLM turns).
-   * Return `undefined` to fall back to agent mode (inject launcher template).
-   * Throw to fall back to error template.
-   *
-   * Only relevant when `usesWorktree !== false`.
+   * Return `ResolveResult` for deterministic launch.
+   * Return `undefined` if resolution fails (CLI exits with error).
    */
   resolve?: (ctx: ResolveContext) => Promise<ResolveResult | undefined>;
 
@@ -194,13 +189,76 @@ export interface WorkflowDefinition {
   __dirname?: string;
 }
 
-// ─── Launcher / Resolve ───────────────────────────────────────────────────────
+// ─── Workflow Parameters ──────────────────────────────────────────────────────
+
+/**
+ * Declares a positional parameter for a workflow.
+ * The framework uses these to parse CLI args, generate help text,
+ * and validate required params before calling resolve/injectWorkerContext.
+ */
+export interface WorkflowParam {
+  /** Parameter name (used as key in `params` record and in CLI help text). */
+  name: string;
+  /** Whether this parameter is required (CLI/engine validates before dispatch). */
+  required: boolean;
+  /** Description for CLI help text. */
+  description?: string;
+}
+
+/** Default param for workflows that don't declare explicit params. */
+export const DEFAULT_PARAMS: WorkflowParam[] = [
+  { name: "prompt", required: false, description: "Freeform arguments" },
+];
+
+/**
+ * Parse a raw args string into a named params record using workflow param declarations.
+ * Positionals are mapped by index to param names.
+ */
+export function parseParams(
+  rawArgs: string,
+  paramDefs: WorkflowParam[],
+): Record<string, string | undefined> {
+  const tokens = rawArgs.trim().split(/\s+/).filter(Boolean);
+  const params: Record<string, string | undefined> = {};
+  for (let i = 0; i < paramDefs.length; i++) {
+    if (i === paramDefs.length - 1 && tokens.length > i) {
+      // Last param consumes all remaining tokens
+      params[paramDefs[i].name] = tokens.slice(i).join(" ");
+    } else {
+      params[paramDefs[i].name] = tokens[i];
+    }
+  }
+  return params;
+}
+
+/**
+ * Validate that all required params are present.
+ * Returns list of missing param names (empty if all present).
+ */
+export function validateParams(
+  params: Record<string, string | undefined>,
+  paramDefs: WorkflowParam[],
+): string[] {
+  return paramDefs
+    .filter((p) => p.required && !params[p.name])
+    .map((p) => p.name);
+}
+
+/**
+ * Generate a CLI usage string from param declarations.
+ * Required params: `<name>`, optional: `[name]`.
+ */
+export function formatParamUsage(paramDefs: WorkflowParam[]): string {
+  return paramDefs
+    .map((p) => (p.required ? `<${p.name}>` : `[${p.name}]`))
+    .join(" ");
+}
+
+// ─── Resolve ──────────────────────────────────────────────────────────────────
 
 export interface ResolveContext {
-  /** Raw args string from the slash command. */
-  args: string;
-  /** Parsed work item ID (if first arg is numeric or a URL). */
-  workItemId: string | null;
+  /** Parsed named parameters (from workflow's `params` declaration). */
+  params: Record<string, string | undefined>;
   /** Shared utilities. */
   utils: WorkflowUtils;
 }
@@ -221,10 +279,8 @@ export interface ResolveResult {
 // ─── Worker Context Injection ─────────────────────────────────────────────────
 
 export interface WorkerContext {
-  /** Args passed from launcher (or directly from slash command). */
-  args: string;
-  /** Parsed work item ID. */
-  workItemId: string | null;
+  /** Parsed named parameters (from workflow's `params` declaration). */
+  params: Record<string, string | undefined>;
   /** The loaded worker template content. */
   template: string;
   /** Session ID. */
@@ -321,7 +377,8 @@ export type ToolFactory = (
 // ─── Helper: Parse Work Item ID ───────────────────────────────────────────────
 
 /** Parse a work item ID from a string (numeric or Azure DevOps URL). */
-export const parseWorkItemId = (input: string): string | null => {
+export const parseWorkItemId = (input: string | undefined | null): string | null => {
+  if (!input) return null;
   const trimmed = input.trim();
   if (/^\d+$/.test(trimmed)) return trimmed;
   const match = trimmed.match(/[?&]workitem=(\d+)/i);
