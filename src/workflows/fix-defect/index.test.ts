@@ -51,11 +51,10 @@ describe("defect workflow resolve", () => {
     mockSetEntry.mockReset();
   });
 
-  test("returns undefined when no workItemId", async () => {
+  test("returns undefined when no defectId", async () => {
     const utils = createMockUtils();
     const result = await defectWorkflow.resolve!({
-      args: "",
-      workItemId: null,
+      params: { defectId: undefined, baseBranch: undefined },
       utils,
     });
     expect(result).toBeUndefined();
@@ -82,8 +81,7 @@ describe("defect workflow resolve", () => {
       })),
     });
     const result = await defectWorkflow.resolve!({
-      args: "71405",
-      workItemId: "71405",
+      params: { defectId: "71405" },
       utils,
     });
     expect(result).toBeUndefined();
@@ -117,8 +115,7 @@ describe("defect workflow resolve", () => {
       })),
     });
     const result = await defectWorkflow.resolve!({
-      args: "71405",
-      workItemId: "71405",
+      params: { defectId: "71405" },
       utils,
     });
 
@@ -129,7 +126,7 @@ describe("defect workflow resolve", () => {
     expect(result!.workerArgs).toBe("71405");
   });
 
-  test("uses explicit baseBranch from args over registry", async () => {
+  test("uses explicit baseBranch from params over registry", async () => {
     mockGetEntry.mockReturnValue({
       branch: "feature/70000-add-dark-mode",
       targetBranch: "staging",
@@ -157,8 +154,7 @@ describe("defect workflow resolve", () => {
       })),
     });
     const result = await defectWorkflow.resolve!({
-      args: "71405 main",
-      workItemId: "71405",
+      params: { defectId: "71405", baseBranch: "main" },
       utils,
     });
 
@@ -193,8 +189,7 @@ describe("defect workflow resolve", () => {
       })),
     });
     await defectWorkflow.resolve!({
-      args: "71405",
-      workItemId: "71405",
+      params: { defectId: "71405" },
       utils,
     });
 
@@ -240,8 +235,7 @@ describe("defect workflow resolve", () => {
       })),
     });
     const result = await defectWorkflow.resolve!({
-      args: "71405",
-      workItemId: "71405",
+      params: { defectId: "71405" },
       utils,
     });
 
@@ -249,18 +243,18 @@ describe("defect workflow resolve", () => {
     await result!.sideEffects!();
   });
 
-  test("returns undefined when fetchWorkItem fails", async () => {
+  test("throws when fetchWorkItem fails (surfaces error to CLI)", async () => {
     const utils = createMockUtils({
       fetchWorkItem: mock(async () => {
         throw new Error("Network error");
       }),
     });
-    const result = await defectWorkflow.resolve!({
-      args: "71405",
-      workItemId: "71405",
-      utils,
-    });
-    expect(result).toBeUndefined();
+    await expect(
+      defectWorkflow.resolve!({
+        params: { defectId: "71405" },
+        utils,
+      }),
+    ).rejects.toThrow("Network error");
   });
 });
 
@@ -271,8 +265,7 @@ describe("defect workflow injectWorkerContext", () => {
     const utils = createMockUtils();
 
     const result = await defectWorkflow.injectWorkerContext({
-      args: "71405",
-      workItemId: "71405",
+      params: { defectId: "71405" },
       template: "test template",
       sessionID: "test-session",
       utils,
@@ -285,11 +278,10 @@ describe("defect workflow injectWorkerContext", () => {
     expect(result.templateVars.TESTING_GUIDANCE).toContain("add-tests");
   });
 
-  test("handles no work item ID", async () => {
+  test("handles no defect ID", async () => {
     const utils = createMockUtils();
     const result = await defectWorkflow.injectWorkerContext({
-      args: "",
-      workItemId: null,
+      params: {},
       template: "test",
       sessionID: "test-session",
       utils,
@@ -301,7 +293,7 @@ describe("defect workflow injectWorkerContext", () => {
   });
 });
 
-// ─── E2E: Full Lifecycle ─────────────────────────────────────────────────────
+// ─── E2E: Full Command Lifecycle ─────────────────────────────────────────────
 
 describe("defect workflow e2e lifecycle", () => {
   let registry: WorkflowRegistry;
@@ -311,13 +303,6 @@ describe("defect workflow e2e lifecycle", () => {
   beforeEach(() => {
     mockGetEntry.mockReset();
     mockSetEntry.mockReset();
-    // Set up registry to return a parent branch for deterministic launch
-    mockGetEntry.mockReturnValue({
-      branch: "feature/70000-add-dark-mode",
-      targetBranch: "staging",
-      workflow: "plan",
-      createdAt: new Date().toISOString(),
-    });
 
     registry = new WorkflowRegistry();
     registry.register(defectWorkflow);
@@ -346,50 +331,13 @@ describe("defect workflow e2e lifecycle", () => {
     hooks = buildWorkflowHooks(registry, utils, createMockLogger());
   });
 
-  test("deterministic launch with registry lookup", async () => {
+  test("command dispatch injects full context", async () => {
     const output = { parts: [{ type: "text", text: "original" }] };
     await hooks["command.execute.before"](
       {
         command: "fix-defect",
-        sessionID: "launcher-session",
-        arguments: "71405",
-      },
-      output,
-    );
-
-    expect(utils.launchWorker).toHaveBeenCalled();
-    const launchArgs = (utils.launchWorker as any).mock.calls[0][0];
-    expect(launchArgs.branchName).toMatch(/^dev\/71405-/);
-    expect(launchArgs.reuseExisting).toBe(false);
-    expect(utils.abortSession).toHaveBeenCalledWith("launcher-session");
-  });
-
-  test("agent fallback when no parent in registry", async () => {
-    mockGetEntry.mockReturnValue(undefined);
-    hooks = buildWorkflowHooks(registry, utils, createMockLogger());
-
-    const output = { parts: [{ type: "text", text: "original" }] };
-    await hooks["command.execute.before"](
-      {
-        command: "fix-defect",
-        sessionID: "launcher-session",
-        arguments: "71405",
-      },
-      output,
-    );
-
-    expect(utils.launchWorker).not.toHaveBeenCalled();
-    expect(utils.abortSession).not.toHaveBeenCalled();
-    expect(output.parts.length).toBe(2);
-  });
-
-  test("worker dispatch with full context", async () => {
-    const output = { parts: [{ type: "text", text: "original" }] };
-    await hooks["command.execute.before"](
-      {
-        command: "workflow-run",
         sessionID: "worker-session",
-        arguments: "fix-defect 71405",
+        arguments: "71405",
       },
       output,
     );

@@ -11,7 +11,7 @@ import {
 describe("parseLauncherMetadata", () => {
   test("extracts metadata from valid block", () => {
     const raw = `Some text before
-<!-- workflow-metadata: {"type":"workflow-launch","workflowName":"implement","branchName":"feature/123","baseBranch":"staging","workerArgs":"123","worktreeDir":"/tmp/wt","workItemId":"123","agentName":"implement-worker","launchedAt":"2026-01-01T00:00:00.000Z"} -->
+<!-- workflow-metadata: {"type":"workflow-launch","workflowName":"implement","branchName":"feature/123","baseBranch":"staging","workerArgs":"123","worktreeDir":"/tmp/wt","workItemId":"123","agentName":"implement","launchedAt":"2026-01-01T00:00:00.000Z"} -->
 Some text after`;
     const meta = parseLauncherMetadata(raw);
     expect(meta).not.toBeNull();
@@ -19,7 +19,7 @@ Some text after`;
     expect(meta!.workflowName).toBe("implement");
     expect(meta!.branchName).toBe("feature/123");
     expect(meta!.worktreeDir).toBe("/tmp/wt");
-    expect(meta!.agentName).toBe("implement-worker");
+    expect(meta!.agentName).toBe("implement");
   });
 
   test("returns null when no metadata block", () => {
@@ -95,7 +95,7 @@ function makeLauncherExport(opts: {
               workerArgs: "123",
               worktreeDir: opts.worktreeDir,
               workItemId: "123",
-              agentName: opts.agentName || "implement-worker",
+              agentName: opts.agentName || "implement",
               launchedAt: opts.launchedAt,
             })} -->`,
           },
@@ -224,7 +224,7 @@ describe("resolveWorkerSession", () => {
       branchName: "bug/456",
       worktreeDir: "/tmp/worktree",
       launchedAt: "2026-01-01T00:00:00.000Z",
-      agentName: "defect-worker",
+      agentName: "fix-defect",
     });
 
     const $ = createMockShell({
@@ -374,7 +374,7 @@ describe("resolveWorkerSession", () => {
       branchName: "bug/456",
       worktreeDir: "/tmp/worktree",
       launchedAt: "2026-01-01T00:00:00.000Z",
-      agentName: "defect-worker",
+      agentName: "fix-defect",
     });
 
     const $ = createMockShell({

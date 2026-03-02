@@ -87,8 +87,7 @@ describe("implement workflow resolve", () => {
   test("returns undefined when only workItemId provided (no baseBranch)", async () => {
     const utils = createMockUtils();
     const result = await implementWorkflow.resolve!({
-      args: "12345",
-      workItemId: "12345",
+      params: { workItemId: "12345", baseBranch: undefined },
       utils,
     });
     expect(result).toBeUndefined();
@@ -97,8 +96,7 @@ describe("implement workflow resolve", () => {
   test("returns ResolveResult when both workItemId and baseBranch provided", async () => {
     const utils = createMockUtils();
     const result = await implementWorkflow.resolve!({
-      args: "12345 staging",
-      workItemId: "12345",
+      params: { workItemId: "12345", baseBranch: "staging" },
       utils,
     });
     expect(result).toBeDefined();
@@ -127,8 +125,7 @@ describe("implement workflow resolve", () => {
       })),
     });
     const result = await implementWorkflow.resolve!({
-      args: "12345 staging",
-      workItemId: "12345",
+      params: { workItemId: "12345", baseBranch: "staging" },
       utils,
     });
     expect(result!.branchName).toBe("dev/12345-fix-checkout-bug");
@@ -141,8 +138,7 @@ describe("implement workflow resolve", () => {
       }),
     });
     const result = await implementWorkflow.resolve!({
-      args: "12345 staging",
-      workItemId: "12345",
+      params: { workItemId: "12345", baseBranch: "staging" },
       utils,
     });
     expect(result!.branchName).toBe("dev/12345");
@@ -151,8 +147,7 @@ describe("implement workflow resolve", () => {
   test("registers branch in registry", async () => {
     const utils = createMockUtils();
     await implementWorkflow.resolve!({
-      args: "12345 feature/70000-add-dark-mode",
-      workItemId: "12345",
+      params: { workItemId: "12345", baseBranch: "feature/70000-add-dark-mode" },
       utils,
     });
 
@@ -169,8 +164,7 @@ describe("implement workflow injectWorkerContext", () => {
   test("injects work item context, media, and new template vars", async () => {
     const utils = createMockUtils();
     const result = await implementWorkflow.injectWorkerContext({
-      args: "12345 feature/70000-add-dark-mode",
-      workItemId: "12345",
+      params: { workItemId: "12345", baseBranch: "feature/70000-add-dark-mode" },
       template: "{{WORK_ITEM_CONTEXT}} {{MEDIA_CONTEXT}} {{REMAINING_WORK}} {{TARGET_BRANCH}} {{TESTING_GUIDANCE}}",
       sessionID: "test-session",
       utils,
@@ -186,8 +180,7 @@ describe("implement workflow injectWorkerContext", () => {
   test("handles missing work item ID gracefully", async () => {
     const utils = createMockUtils();
     const result = await implementWorkflow.injectWorkerContext({
-      args: "",
-      workItemId: null,
+      params: {},
       template: "{{WORK_ITEM_CONTEXT}}",
       sessionID: "test-session",
       utils,
@@ -200,7 +193,7 @@ describe("implement workflow injectWorkerContext", () => {
   });
 });
 
-// ─── E2E: Full Launcher → Worker Lifecycle ───────────────────────────────────
+// ─── E2E: Full Command Lifecycle ─────────────────────────────────────────────
 
 describe("implement workflow e2e lifecycle", () => {
   let registry: WorkflowRegistry;
@@ -215,71 +208,34 @@ describe("implement workflow e2e lifecycle", () => {
     hooks = buildWorkflowHooks(registry, utils, createMockLogger());
   });
 
-  test("deterministic launch: creates worktree and aborts", async () => {
+  test("command dispatch injects full context", async () => {
     const output = { parts: [{ type: "text", text: "original" }] };
     await hooks["command.execute.before"](
       {
         command: "implement",
-        sessionID: "launcher-session",
-        arguments: "12345 staging",
-      },
-      output,
-    );
-
-    expect(utils.launchWorker).toHaveBeenCalled();
-    expect(utils.abortSession).toHaveBeenCalledWith("launcher-session");
-    expect(output.parts.length).toBe(3);
-    expect(output.parts[0].text).toContain("Worker launched");
-    expect(output.parts[1].text).toContain("Do NOT continue working");
-    const meta = output.parts[2].text;
-    expect(meta).toContain("<!-- workflow-metadata:");
-    expect(meta).toContain('"workflowName":"implement"');
-    expect(meta).toContain("-->");
-  });
-
-  test("agent fallback when no baseBranch", async () => {
-    const output = { parts: [{ type: "text", text: "original" }] };
-    await hooks["command.execute.before"](
-      {
-        command: "implement",
-        sessionID: "launcher-session",
+        sessionID: "worker-session",
         arguments: "12345",
       },
       output,
     );
 
-    expect(utils.launchWorker).not.toHaveBeenCalled();
-    expect(utils.abortSession).not.toHaveBeenCalled();
-    expect(output.parts.length).toBe(2);
-  });
-
-  test("worker dispatch injects full context", async () => {
-    const output = { parts: [{ type: "text", text: "original" }] };
-    await hooks["command.execute.before"](
-      {
-        command: "workflow-run",
-        sessionID: "worker-session",
-        arguments: "implement 12345",
-      },
-      output,
-    );
-
+    // 3 parts: user message + template + worker metadata
     expect(output.parts.length).toBe(3);
     const context = output.parts[1].text;
     const unreplaced = context.match(/\{\{[A-Z_]+\}\}/g) || [];
     expect(unreplaced).toEqual([]);
     const workerMeta = output.parts[2].text;
     expect(workerMeta).toContain("<!-- worker-metadata:");
-    expect(workerMeta).toContain('"workerSessionId":"worker-session"');
+    expect(workerMeta).toContain('"sessionId":"worker-session"');
   });
 
-  test("worker dispatch handles quoted arguments from OpenCode CLI", async () => {
+  test("command dispatch handles quoted arguments from OpenCode CLI", async () => {
     const output = { parts: [{ type: "text", text: "original" }] };
     await hooks["command.execute.before"](
       {
-        command: "workflow-run",
+        command: "implement",
         sessionID: "worker-session",
-        arguments: '"implement 12345"',
+        arguments: '"12345"',
       },
       output,
     );
@@ -297,9 +253,9 @@ describe("implement workflow e2e lifecycle", () => {
     const output = { parts: [{ type: "text", text: "original" }] };
     await hooks["command.execute.before"](
       {
-        command: "workflow-run",
+        command: "implement",
         sessionID: "worker-session",
-        arguments: "implement 12345",
+        arguments: "12345",
       },
       output,
     );
