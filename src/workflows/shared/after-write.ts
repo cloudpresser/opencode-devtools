@@ -41,8 +41,7 @@ export const afterWriteTypeCheckAndTest: AfterWriteHandler = async (ctx) => {
     const testResult = await ctx.utils
       .$`yarn test 2>&1`
       .nothrow()
-      .quiet()
-      .timeout(300_000); // 5 minutes
+      .quiet();
 
     const output = (
       testResult.stdout?.toString() ||
@@ -62,11 +61,8 @@ export const afterWriteTypeCheckAndTest: AfterWriteHandler = async (ctx) => {
         "All tests passed";
       results.push(`\n--- TESTS: PASSED (${summaryLine.trim()}) ---`);
     }
-  } catch (e: any) {
-    if (e.message?.includes("timeout")) {
-      results.push(`\n--- TESTS: TIMED OUT (5 min limit) ---`);
-    }
-    /* else non-fatal */
+  } catch {
+    /* non-fatal */
   }
 
   return results.length > 0 ? results.join("\n") : undefined;
