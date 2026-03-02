@@ -2,46 +2,48 @@
  * Defect Workflow — Fix defects in isolated worktrees.
  *
  * Branching: Creates `dev/<id>-<slug>` from the parent work item's
- * branch (looked up in the branch registry). Falls back to launcher
- * mode if no registry entry is found, prompting the user for a branch.
+ * branch (looked up in the branch registry), or from an explicit
+ * baseBranch argument. CLI exits with error if no branch is resolvable.
  *
- * Launcher: /fix-defect <defectId> [baseBranch]
- * Worker: receives context via /workflow-run fix-defect <defectId>
+ * CLI: devtools fix-defect <defectId> [baseBranch]
+ * Agent bootstraps via: /fix-defect <defectId>
  */
 
 import type {
   WorkflowDefinition,
+  WorkflowParam,
   ResolveContext,
   ResolveResult,
   WorkerContext,
   WorkerContextResult,
 } from "../types";
+import { parseWorkItemId } from "../types";
 import { pushQueueConclusion } from "../conclusions";
 import { TESTING_GUIDANCE } from "../shared/testing-guidance";
 import { afterWriteTypeCheckAndTest } from "../shared/after-write";
 import { deriveDevBranch } from "../shared/branch-utils";
 import { getEntry, setEntry } from "../../branch-registry";
 
-// ─── Resolve (Launcher) ──────────────────────────────────────────────────────
+// ─── Params ──────────────────────────────────────────────────────────────────
+
+const params: WorkflowParam[] = [
+  { name: "defectId", required: true, description: "Defect work item ID or URL" },
+  { name: "baseBranch", required: false, description: "Branch to create worktree from (auto-detected from parent)" },
+];
+
+// ─── Resolve (CLI pre-launch) ────────────────────────────────────────────────
 
 const resolve = async (
   ctx: ResolveContext,
 ): Promise<ResolveResult | undefined> => {
-  if (!ctx.workItemId) return undefined;
+  const defectId = parseWorkItemId(ctx.params.defectId);
+  if (!defectId) return undefined;
 
-  // Fetch the defect
-  let defect: any;
-  try {
-    const result = await ctx.utils.fetchWorkItem(ctx.workItemId);
-    defect = result.raw;
-  } catch {
-    // Can't fetch work item — fall back to agent mode
-    return undefined;
-  }
+  // Fetch the defect — let errors propagate so the CLI can surface them
+  const { raw: defect } = await ctx.utils.fetchWorkItem(defectId);
 
   // Determine baseBranch: explicit arg > parent registry lookup
-  const parts = ctx.args.split(/\s+/);
-  let baseBranch: string | undefined = parts[1] || undefined;
+  let baseBranch: string | undefined = ctx.params.baseBranch;
 
   if (!baseBranch) {
     // Look up parent work item's branch in the registry
@@ -56,14 +58,13 @@ const resolve = async (
     }
   }
 
-  // If still no baseBranch, fall back to agent mode (launcher asks user)
   if (!baseBranch) return undefined;
 
   // Derive branch name: dev/<id>-<slug>
   const branchName = deriveDevBranch(defect);
 
   // Register in branch registry
-  setEntry(ctx.workItemId, {
+  setEntry(defectId, {
     branch: branchName,
     targetBranch: baseBranch,
     workflow: "fix-defect",
@@ -73,13 +74,13 @@ const resolve = async (
   return {
     branchName,
     baseBranch,
-    workerArgs: ctx.workItemId,
+    workerArgs: defectId,
     reuseExisting: false,
     sideEffects: async () => {
       // Move defect to In-Progress (best-effort)
       try {
         await ctx.utils
-          .$`az boards work-item update --id ${ctx.workItemId} --state In-Progress`
+          .$`az boards work-item update --id ${defectId} --state In-Progress`
           .quiet()
           .nothrow();
       } catch {
@@ -94,13 +95,12 @@ const resolve = async (
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => {
-  // Extract baseBranch from args or default
-  const parts = ctx.args.split(/\s+/);
-  const baseBranch = parts[1] || "staging";
+  const defectId = parseWorkItemId(ctx.params.defectId);
+  const baseBranch = ctx.params.baseBranch || "staging";
 
-  if (!ctx.workItemId) {
+  if (!defectId) {
     return {
-      userMessage: `Fix defect: ${ctx.args}`,
+      userMessage: "Fix defect: no defect ID provided",
       templateVars: {
         DEFECT_CONTEXT: "No defect ID provided.",
         PARENT_CONTEXT: "",
@@ -115,7 +115,7 @@ const injectWorkerContext = async (
 
   // Fetch defect
   const { formatted: defectCtx, raw: defect } =
-    await ctx.utils.fetchWorkItem(ctx.workItemId);
+    await ctx.utils.fetchWorkItem(defectId);
 
   // Fetch parent work item
   let parentCtx = "> No parent work item found.";
@@ -160,14 +160,14 @@ const injectWorkerContext = async (
     userMessage: ctx.utils.generateUserMessage(
       "fix-defect",
       defect,
-      ctx.workItemId,
-      ctx.args,
+      defectId,
+      Object.values(ctx.params).filter(Boolean).join(" "),
     ),
     templateVars: {
       DEFECT_CONTEXT: defectCtx,
       PARENT_CONTEXT: parentCtx,
       MEDIA_CONTEXT: media,
-      DEFECT_ID: ctx.workItemId,
+      DEFECT_ID: defectId,
       TARGET_BRANCH: targetBranch,
       REMAINING_WORK: remainingStr,
       TESTING_GUIDANCE: TESTING_GUIDANCE,
@@ -182,14 +182,14 @@ export const defectWorkflow: WorkflowDefinition = {
   description: "Fix a defect in an isolated worktree",
   requiredTools: ["work-item", "generate"],
   workerTemplate: "worker.md",
-  launcherTemplate: "launcher.md",
+  params,
   usesWorktree: true,
   resolve,
   injectWorkerContext,
   conclusion: pushQueueConclusion,
   injectAfterWrite: [afterWriteTypeCheckAndTest],
   agent: {
-    name: "defect-worker",
+    name: "fix-defect",
     model: "opencode/claude-opus-4-6",
     mode: "all",
     description:

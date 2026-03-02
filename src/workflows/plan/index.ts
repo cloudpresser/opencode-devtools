@@ -9,19 +9,29 @@
 
 import type {
   WorkflowDefinition,
+  WorkflowParam,
   WorkerContext,
   WorkerContextResult,
 } from "../types";
+import { parseWorkItemId } from "../types";
 import { noneConclusion } from "../conclusions";
+
+// ─── Params ──────────────────────────────────────────────────────────────────
+
+const params: WorkflowParam[] = [
+  { name: "workItemId", required: true, description: "Work item ID or URL" },
+];
 
 // ─── Worker Context Injection ────────────────────────────────────────────────
 
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => {
-  if (!ctx.workItemId) {
+  const workItemId = parseWorkItemId(ctx.params.workItemId);
+
+  if (!workItemId) {
     return {
-      userMessage: `Plan: ${ctx.args}`,
+      userMessage: "Plan: no work item ID provided",
       templateVars: {
         WORK_ITEM_CONTEXT: "No work item ID provided. Please provide a work item ID to plan.",
         MEDIA_CONTEXT: "",
@@ -30,7 +40,7 @@ const injectWorkerContext = async (
   }
 
   const { formatted, raw: workItem } = await ctx.utils.fetchWorkItem(
-    ctx.workItemId,
+    workItemId,
   );
 
   const media = await ctx.utils.processMedia(
@@ -42,8 +52,8 @@ const injectWorkerContext = async (
     userMessage: ctx.utils.generateUserMessage(
       "plan",
       workItem,
-      ctx.workItemId,
-      ctx.args,
+      workItemId,
+      Object.values(ctx.params).filter(Boolean).join(" "),
     ),
     templateVars: {
       WORK_ITEM_CONTEXT: formatted,
@@ -59,7 +69,8 @@ export const planWorkflow: WorkflowDefinition = {
   description: "Break down a work item into sub-tasks",
   requiredTools: ["work-item"],
   workerTemplate: "plan.md",
-  usesWorktree: false, // runs in current session
+  params,
+  usesWorktree: false,
   injectWorkerContext,
   conclusion: noneConclusion,
   __dirname: import.meta.dir,

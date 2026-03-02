@@ -156,7 +156,7 @@ function listRegisteredWorkflows(): string {
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => {
-  const args = ctx.args.trim();
+  const args = (ctx.params.prompt || "").trim();
   const parts = args.split(/\s+/);
 
   let sessionAnalysis = "";
@@ -198,8 +198,8 @@ const injectWorkerContext = async (
       }
 
       sessionAnalysis += "\n\n### Metadata Blocks\n";
-      sessionAnalysis += `- Launcher metadata (\`<!-- workflow-metadata: -->\`): ${hasLauncherMeta ? "**PRESENT**" : "**MISSING** — engine's handleLauncher didn't inject it"}\n`;
-      sessionAnalysis += `- Worker metadata (\`<!-- worker-metadata: -->\`): ${hasWorkerMeta ? "**PRESENT**" : "**MISSING** — engine's handleWorkerDispatch didn't inject it"}\n`;
+      sessionAnalysis += `- Launcher metadata (\`<!-- workflow-metadata: -->\`): ${hasLauncherMeta ? "**PRESENT**" : "not found"}\n`;
+      sessionAnalysis += `- Worker metadata (\`<!-- worker-metadata: -->\`): ${hasWorkerMeta ? "**PRESENT**" : "**MISSING** — engine's command handler didn't inject it"}\n`;
 
       if (!hasWorkerMeta && !hasLauncherMeta) {
         sessionAnalysis +=

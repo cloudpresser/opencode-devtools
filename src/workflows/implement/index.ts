@@ -5,17 +5,19 @@
  * branch (typically a feature/ branch created by /plan). The base
  * branch is passed explicitly as the second argument.
  *
- * Launcher: /implement <workItemId> <baseBranch>
- * Worker: receives context via /workflow-run implement <workItemId>
+ * CLI: devtools implement <workItemId> <baseBranch>
+ * Agent bootstraps via: /implement <workItemId>
  */
 
 import type {
   WorkflowDefinition,
+  WorkflowParam,
   ResolveContext,
   ResolveResult,
   WorkerContext,
   WorkerContextResult,
 } from "../types";
+import { parseWorkItemId } from "../types";
 import { pushQueueConclusion } from "../conclusions";
 import { TESTING_GUIDANCE } from "../shared/testing-guidance";
 import { afterWriteTypeCheckAndTest } from "../shared/after-write";
@@ -37,16 +39,21 @@ export function deriveBranchName(workItem: {
   return deriveDevBranch(workItem);
 }
 
-// ─── Resolve (Launcher) ──────────────────────────────────────────────────────
+// ─── Params ──────────────────────────────────────────────────────────────────
+
+const params: WorkflowParam[] = [
+  { name: "workItemId", required: true, description: "Work item ID or URL" },
+  { name: "baseBranch", required: true, description: "Branch to create worktree from" },
+];
+
+// ─── Resolve (CLI pre-launch) ────────────────────────────────────────────────
 
 const resolve = async (
   ctx: ResolveContext,
 ): Promise<ResolveResult | undefined> => {
-  const parts = ctx.args.split(/\s+/);
-  const workItemId = ctx.workItemId;
-  const baseBranch = parts[1] || null;
+  const workItemId = parseWorkItemId(ctx.params.workItemId);
+  const baseBranch = ctx.params.baseBranch;
 
-  // Need both workItemId AND baseBranch for deterministic launch
   if (!workItemId || !baseBranch) return undefined;
 
   // Fetch work item for branch name derivation
@@ -79,13 +86,12 @@ const resolve = async (
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => {
-  // Extract baseBranch from args: "<workItemId> <baseBranch>"
-  const parts = ctx.args.split(/\s+/);
-  const baseBranch = parts[1] || "staging";
+  const workItemId = parseWorkItemId(ctx.params.workItemId);
+  const baseBranch = ctx.params.baseBranch || "staging";
 
-  if (!ctx.workItemId) {
+  if (!workItemId) {
     return {
-      userMessage: `Implement: ${ctx.args}`,
+      userMessage: "Implement: no work item ID provided",
       templateVars: {
         WORK_ITEM_CONTEXT: "No work item ID provided.",
         MEDIA_CONTEXT: "",
@@ -97,7 +103,7 @@ const injectWorkerContext = async (
   }
 
   const { formatted, raw: workItem } = await ctx.utils.fetchWorkItem(
-    ctx.workItemId,
+    workItemId,
   );
 
   const media = await ctx.utils.processMedia(
@@ -115,8 +121,8 @@ const injectWorkerContext = async (
     userMessage: ctx.utils.generateUserMessage(
       "implement",
       workItem,
-      ctx.workItemId,
-      ctx.args,
+      workItemId,
+      Object.values(ctx.params).filter(Boolean).join(" "),
     ),
     templateVars: {
       WORK_ITEM_CONTEXT: formatted,
@@ -135,14 +141,14 @@ export const implementWorkflow: WorkflowDefinition = {
   description: "Implement a work item in a new worktree",
   requiredTools: ["work-item", "generate"],
   workerTemplate: "worker.md",
-  launcherTemplate: "launcher.md",
+  params,
   usesWorktree: true,
   resolve,
   injectWorkerContext,
   conclusion: pushQueueConclusion,
   injectAfterWrite: [afterWriteTypeCheckAndTest],
   agent: {
-    name: "implement-worker",
+    name: "implement",
     model: "opencode/claude-opus-4-6",
     mode: "all",
     description:

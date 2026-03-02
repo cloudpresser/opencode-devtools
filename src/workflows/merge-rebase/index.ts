@@ -7,19 +7,26 @@
 
 import type {
   WorkflowDefinition,
+  WorkflowParam,
   WorkerContext,
   WorkerContextResult,
 } from "../types";
 import { directPushConclusion } from "../conclusions";
+
+// ─── Params ──────────────────────────────────────────────────────────────────
+
+const params: WorkflowParam[] = [
+  { name: "branch", required: true, description: "PR branch to update" },
+];
 
 // ─── Worker Context Injection ────────────────────────────────────────────────
 
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => ({
-  userMessage: `Merge staging into ${ctx.args} and verify no regressions`,
+  userMessage: `Merge staging into ${ctx.params.branch} and verify no regressions`,
   templateVars: {
-    BRANCH: ctx.args,
+    BRANCH: ctx.params.branch || "",
   },
 });
 
@@ -30,6 +37,7 @@ export const mergeRebaseWorkflow: WorkflowDefinition = {
   description: "Update PR branch with latest staging",
   requiredTools: ["check-types", "lint", "run-tests"],
   workerTemplate: "worker.md",
+  params,
   usesWorktree: false,
   injectWorkerContext,
   conclusion: directPushConclusion,

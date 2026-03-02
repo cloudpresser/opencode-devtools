@@ -67,7 +67,7 @@ function readPluginFile(relativePath: string): string {
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => {
-  const args = ctx.args.trim();
+  const args = (ctx.params.prompt || "").trim();
   const parts = args.split(/\s+/);
 
   let sessionAnalysis = "";

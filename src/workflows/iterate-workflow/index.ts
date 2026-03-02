@@ -57,11 +57,6 @@ function detectWorkflowFromExport(
         );
         if (workerMatch) return workerMatch[1];
 
-        // Check for workflow-run dispatch
-        const runMatch = part.text.match(/workflow-run\s+(\S+)/);
-        if (runMatch && knownWorkflows.includes(runMatch[1]))
-          return runMatch[1];
-
         // Check for slash commands
         for (const name of knownWorkflows) {
           if (part.text.includes(`/${name} `) || part.text.includes(`/${name}\n`)) {
@@ -121,7 +116,7 @@ function safeReadFile(path: string, label: string): string {
 const injectWorkerContext = async (
   ctx: WorkerContext,
 ): Promise<WorkerContextResult> => {
-  const rawSessionId = ctx.args.trim();
+  const rawSessionId = (ctx.params.prompt || "").trim();
 
   if (!rawSessionId || !rawSessionId.startsWith("ses_")) {
     return {
