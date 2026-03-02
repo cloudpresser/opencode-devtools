@@ -36,7 +36,13 @@ const uniqueBranch = () => `test-branch-${++worktreeCounter}`;
 
 // ─── Setup / Teardown ─────────────────────────────────────────────────────────
 
+let savedTmux: string | undefined;
+
 beforeAll(async () => {
+  // Prevent tests from spawning real tmux windows
+  savedTmux = process.env.TMUX;
+  delete process.env.TMUX;
+
   tmpRoot = mkdtempSync(join(tmpdir(), "devtools-worktree-test-"));
 
   // Create a regular git repo
@@ -65,6 +71,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  if (savedTmux !== undefined) process.env.TMUX = savedTmux;
   if (tmpRoot && existsSync(tmpRoot)) {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

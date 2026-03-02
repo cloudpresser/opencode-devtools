@@ -373,6 +373,16 @@ export async function createWorktreeDirect(
 
       if (sessionLockContent.equals(worktreeLockContent)) {
         shallowCopyNodeModules(root, worktreeDir);
+        // Copy Yarn v1 integrity file so `yarn <script>` doesn't trigger
+        // a full install validation in the worktree
+        try {
+          const integrityPath = join("node_modules", ".yarn-integrity");
+          const srcIntegrity = join(root, integrityPath);
+          const dstIntegrity = join(worktreeDir, integrityPath);
+          if (existsSync(srcIntegrity)) {
+            copyFileSync(srcIntegrity, dstIntegrity);
+          }
+        } catch { /* non-fatal — fallback validation below */ }
         depsStatus =
           "node_modules shallow-copied (workspace symlinks re-created)";
       } else {
@@ -382,11 +392,45 @@ export async function createWorktreeDirect(
     } else {
       // No lockfile comparison possible — shallow copy optimistically
       shallowCopyNodeModules(root, worktreeDir);
+      // Copy Yarn v1 integrity file
+      try {
+        const integrityPath = join("node_modules", ".yarn-integrity");
+        const srcIntegrity = join(root, integrityPath);
+        const dstIntegrity = join(worktreeDir, integrityPath);
+        if (existsSync(srcIntegrity)) {
+          copyFileSync(srcIntegrity, dstIntegrity);
+        }
+      } catch { /* non-fatal */ }
       depsStatus =
         "node_modules shallow-copied (no lockfile comparison available)";
     }
   } catch (e: any) {
     depsStatus = `Failed to set up dependencies: ${e.message}. Run yarn install manually in the worktree.`;
+  }
+
+  // 3b. Validate yarn works in the worktree after shallow copy.
+  //     If the integrity check fails (e.g. shallow copy isn't sufficient),
+  //     fall back to a full install.
+  if (depsStatus.includes("shallow-copied") && existsSync(worktreeNodeModules)) {
+    try {
+      const check = await $`cd ${worktreeDir} && yarn --version 2>&1`
+        .nothrow()
+        .quiet()
+        .timeout(15_000);
+      if (check.exitCode !== 0) {
+        _log.warn("worktree", "yarn validation failed after shallow copy, falling back to yarn install");
+        await $`cd ${worktreeDir} && yarn install --frozen-lockfile`.quiet();
+        depsStatus = "yarn install completed (shallow copy integrity check failed)";
+      }
+    } catch {
+      _log.warn("worktree", "yarn validation timed out, falling back to yarn install");
+      try {
+        await $`cd ${worktreeDir} && yarn install --frozen-lockfile`.quiet();
+        depsStatus = "yarn install completed (fallback after validation timeout)";
+      } catch (e: any) {
+        depsStatus += ` — WARNING: yarn install fallback also failed: ${e.message}`;
+      }
+    }
   }
 
   // 4. Symlink .husky/_/ for pre-commit hook support.
