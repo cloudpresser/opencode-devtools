@@ -23,7 +23,9 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 # After all commits are pushed, create PR and update board if configured.
 
 post_push_actions() {
-  local PR_CONFIG="/tmp/push-queue-pr-${BRANCH}.json"
+  local SAFE_BRANCH
+  SAFE_BRANCH="$(printf '%s' "$BRANCH" | sed 's|/|--|g')"
+  local PR_CONFIG="/tmp/push-queue-pr-${SAFE_BRANCH}.json"
   if [[ ! -f "$PR_CONFIG" ]]; then
     log "No PR config found — skipping post-push actions"
     return 0
@@ -56,7 +58,7 @@ print(' '.join(['--workItems ' + str(w) for w in items]))
 
     # Pipe answers to interactive prompts:
     # n = don't edit title, n = don't edit description, y = create PR
-    PR_OUTPUT=$(printf 'n\nn\ny\n' | npx @cloudpresser/create-pr \
+    PR_OUTPUT=$(printf 'n\nn\ny\n' | npx @cloudpresser/create-pr --skip \
       --userPrompt "$USER_PROMPT" \
       --targetBranch "$TARGET_BRANCH" \
       --sourceBranch "$BRANCH" \
@@ -102,8 +104,8 @@ log "=== push-queue run for ${REMOTE}/${BRANCH} ==="
 # Fetch latest remote state
 git fetch "$REMOTE" "$BRANCH" --quiet 2>/dev/null || true
 
-REMOTE_TIP=$(git rev-parse "${REMOTE}/${BRANCH}" 2>/dev/null || echo "")
-LOCAL_TIP=$(git rev-parse "$BRANCH" 2>/dev/null || echo "")
+REMOTE_TIP=$(git rev-parse --verify "${REMOTE}/${BRANCH}" 2>/dev/null || echo "")
+LOCAL_TIP=$(git rev-parse --verify "$BRANCH" 2>/dev/null || echo "")
 
 if [[ -z "$LOCAL_TIP" ]]; then
   log "ERROR: local branch '$BRANCH' not found"
@@ -123,7 +125,9 @@ fi
 if [[ -n "$REMOTE_TIP" ]]; then
   COMMITS=$(git log --reverse --format='%H %aI' "${REMOTE_TIP}..${BRANCH}")
 else
-  COMMITS=$(git log --reverse --format='%H %aI' "$BRANCH")
+  # No remote branch yet — list commits since default branch (remote/HEAD)
+  COMMITS=$(git log --reverse --format='%H %aI' "${REMOTE}/HEAD..${BRANCH}" 2>/dev/null) ||
+    COMMITS=$(git log --reverse --format='%H %aI' "$BRANCH")
 fi
 
 if [[ -z "$COMMITS" ]]; then
@@ -145,7 +149,7 @@ while IFS=' ' read -r SHA DATE; do
   else
     log "  waiting: ${SHA:0:10} ($DATE)"
   fi
-done <<< "$COMMITS"
+done <<<"$COMMITS"
 
 if [[ -z "$PUSH_UP_TO" ]]; then
   log "No commits ready yet (all dates in the future)"

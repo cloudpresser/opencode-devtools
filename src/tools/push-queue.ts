@@ -8,6 +8,9 @@ import fs from "node:fs";
 const SCRIPT_NAME = "push-queue.sh";
 const CRON_TAG_PREFIX = "push-queue:";
 
+/** Sanitize branch name for use in file paths (replace / with --). */
+const safeBranch = (b: string) => b.replace(/\//g, "--");
+
 /** Resolve the embedded push-queue.sh script bundled with this plugin. */
 const getScriptPath = () =>
   path.resolve(import.meta.dirname, "../scripts", SCRIPT_NAME);
@@ -358,7 +361,7 @@ export function createPushQueueScheduleTool(
         // Merge PR configs if rescheduling — combine work items from
         // the existing config with any new ones being scheduled.
         if (alreadyExists && args.prConfig) {
-          const existingPrPath = `/tmp/push-queue-pr-${branch}.json`;
+          const existingPrPath = `/tmp/push-queue-pr-${safeBranch(branch)}.json`;
           try {
             if (fs.existsSync(existingPrPath)) {
               const prev = JSON.parse(
@@ -379,8 +382,8 @@ export function createPushQueueScheduleTool(
         // Determine unpushed commits
         let remoteTip = "";
         try {
-          remoteTip = (
-            await $`git -C ${root} rev-parse ${remote}/${branch} 2>/dev/null`.text()
+           remoteTip = (
+            await $`git -C ${root} rev-parse --verify ${remote}/${branch} 2>/dev/null`.text()
           ).trim();
         } catch {
           // Branch may not exist on remote yet — all commits are unpushed
@@ -484,7 +487,7 @@ export function createPushQueueScheduleTool(
         // BunShell's `echo` because BunShell auto-escapes `$()` in
         // interpolated values, which would break the shell date expansion
         // in the log redirect path.
-        const logFile = `/tmp/git-push-${branch}-$(date +%Y%m%d).log`;
+        const logFile = `/tmp/git-push-${safeBranch(branch)}-$(date +%Y%m%d).log`;
         const cronLine = `*/${cronInterval} * * * * ${scriptPath} ${branch} ${remote} ${root} >> ${logFile} 2>&1 # tensor:${CRON_TAG_PREFIX}${branch}`;
         const tmpCron = `/tmp/.push-queue-cron-${Date.now()}.tmp`;
 
@@ -505,7 +508,7 @@ export function createPushQueueScheduleTool(
 
         // Write PR config for post-push actions (if provided)
         if (args.prConfig) {
-          const prConfigPath = `/tmp/push-queue-pr-${branch}.json`;
+          const prConfigPath = `/tmp/push-queue-pr-${safeBranch(branch)}.json`;
           fs.writeFileSync(
             prConfigPath,
             JSON.stringify({ ...args.prConfig, sourceBranch: branch }, null, 2),
@@ -564,11 +567,13 @@ export function createPushQueueLogsTool(
         ),
       },
       async execute(args) {
-        let branch = args.branch;
+        let branch: string;
         const lines = args.lines ?? 50;
 
         // If no branch specified, find from active jobs
-        if (!branch) {
+        if (args.branch) {
+          branch = args.branch;
+        } else {
           const jobs = await parseCronJobs($);
           if (jobs.length > 0) {
             branch = jobs[0].branch;
@@ -580,13 +585,13 @@ export function createPushQueueLogsTool(
         const date = (
           args.date ?? new Date().toISOString().slice(0, 10)
         ).replace(/-/g, "");
-        const logPath = `/tmp/git-push-${branch}-${date}.log`;
+        const logPath = `/tmp/git-push-${safeBranch(branch)}-${date}.log`;
 
         if (!fs.existsSync(logPath)) {
           // List available logs
           try {
             const available =
-              await $`ls -la /tmp/git-push-${branch}-*.log 2>/dev/null`.text();
+              await $`ls -la /tmp/git-push-${safeBranch(branch)}-*.log 2>/dev/null`.text();
             return `No log found at ${logPath}\n\nAvailable logs:\n${available}`;
           } catch {
             return `No log found at ${logPath} and no other logs for branch '${branch}'.`;
@@ -636,7 +641,7 @@ export function createPushQueueJobsTool(
 
           // Log info
           const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-          const logPath = `/tmp/git-push-${job.branch}-${today}.log`;
+          const logPath = `/tmp/git-push-${safeBranch(job.branch)}-${today}.log`;
           if (fs.existsSync(logPath)) {
             try {
               const lastLine = await $`tail -1 ${logPath}`.text();
